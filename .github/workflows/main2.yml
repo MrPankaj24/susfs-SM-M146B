@@ -1,125 +1,302 @@
-name: Build Samsung M14 Kernel (Make)
+name: 🔨 Build SM-M146B Custom Kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      KERNEL_BRANCH:
+        description: "Kernel source branch"
+        required: true
+        default: "main"
+      DEFCONFIG:
+        description: "Defconfig name (e.g. erd8535_t_gki_defconfig)"
+        required: true
+        default: "erd8535_t_gki_defconfig"
+      MAKE_BOOT_IMAGE:
+        description: "Package output into AnyKernel3 zip?"
+        required: true
+        type: boolean
+        default: true
+
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-kernel.yml"
+
+env:
+  # ──────────────────────────────────────────────────────────────
+  # Kernel source repository (your fork/source)
+  # ──────────────────────────────────────────────────────────────
+  KERNEL_REPO: "https://github.com/MrPankaj24/SM-M146B-Kernel-Source.git"
+  KERNEL_BRANCH: ${{ github.event.inputs.KERNEL_BRANCH || 'main' }}
+
+  # ──────────────────────────────────────────────────────────────
+  # Device / build configuration
+  # ──────────────────────────────────────────────────────────────
+  DEVICE_MODEL:   "SM-M146B"
+  DEVICE_CODENAME: "m14x"
+  TARGET_ARCH:    "arm64"
+  TARGET_SOC:     "s5e8535"
+
+  # Defconfig
+  DEFCONFIG:      ${{ github.event.inputs.DEFCONFIG || 'erd8535_t_gki_defconfig' }}
+
+  # ──────────────────────────────────────────────────────────────
+  # Toolchain – Neutron-Clang (latest) is used for kernel 6.1
+  # ──────────────────────────────────────────────────────────────
+  CLANG_DIR:      "${{ github.workspace }}/toolchains/neutron-clang"
+
+  # ──────────────────────────────────────────────────────────────
+  # Build output
+  # ──────────────────────────────────────────────────────────────
+  KERNEL_OUT:     "${{ github.workspace }}/out"
+  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    
+    name: 🏗️ Build Kernel (${{ github.event.inputs.DEFCONFIG || 'erd8535_t_gki_defconfig' }})
+    runs-on: ubuntu-22.04
+    # Give the job a generous timeout for large kernel builds
+    timeout-minutes: 120
+
     steps:
-    - name: Checkout Workflow
-      uses: actions/checkout@v4
+      # ────────────────────────────────────────────────────────
+      # 1. Checkout this (workflow) repo
+      # ────────────────────────────────────────────────────────
+      - name: 📥 Checkout workflow repo
+        uses: actions/checkout@v4
+        with:
+          path: workflow-repo
 
-    - name: Free Disk Space
-      uses: endersonmenezes/free-disk-space@v3
-      with:
-        remove_android: true
-        remove_dotnet: true
-        remove_haskell: true
+      # ────────────────────────────────────────────────────────
+      # 2. Install build dependencies
+      # ────────────────────────────────────────────────────────
+      - name: 📦 Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git device-tree-compiler lz4 xz-utils zlib1g-dev \
+            openjdk-17-jdk gcc g++ python3 python-is-python3 \
+            p7zip-full android-sdk-libsparse-utils erofs-utils \
+            gnupg flex bison gperf build-essential zip curl \
+            libc6-dev libncurses-dev libx11-dev libreadline-dev \
+            libgl1 libgl1-mesa-dev make bc grep tofrodos \
+            python3-markdown libxml2-utils xsltproc \
+            libc6-dev libtinfo6 cpio kmod openssl libelf-dev \
+            pahole libssl-dev libarchive-tools zstd rsync \
+            binutils-aarch64-linux-gnu ca-certificates ccache
+          # libtinfo5 shim needed by some older host tools
+          wget -q http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git build-essential bc bison flex libssl-dev libncurses5-dev zip curl
+      # ────────────────────────────────────────────────────────
+      # 3. Clone kernel source (shallow clone for speed)
+      # ────────────────────────────────────────────────────────
+      - name: 📥 Clone kernel source
+        run: |
+          echo "[INFO] Cloning ${{ env.KERNEL_REPO }} @ ${{ env.KERNEL_BRANCH }}"
+          git clone --depth=1 \
+            --branch "$({{ env.KERNEL_BRANCH }})" \
+            "${{ env.KERNEL_REPO }}" \
+            kernel-source
+          echo "KERNEL_SOURCE=${{ github.workspace }}/kernel-source" >> "$GITHUB_ENV"
 
-    - name: Download Toolchain (AOSP Clang)
-      run: |
-        mkdir -p toolchain
-        cd toolchain
-        # Downloading a stable AOSP Clang version
-        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
-        tar -xzf clang-r487747c.tar.gz
-        cd ..
+      # ────────────────────────────────────────────────────────
+      # 4. Set up Neutron-Clang toolchain (cached)
+      # ────────────────────────────────────────────────────────
+      - name: 🔧 Cache Neutron-Clang toolchain
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CLANG_DIR }}
+          key: neutron-clang-${{ runner.os }}-v1
 
-    - name: Clone Your Kernel Source
-      run: |
-        # Cloning your specific repo
-        git clone https://github.com/MrPankaj24/SM-M146B-Kernel-Source.git android_kernel
+      - name: 🔧 Download Neutron-Clang (if not cached)
+        if: steps.cache-clang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "${{ env.CLANG_DIR }}"
+          cd "${{ env.CLANG_DIR }}"
+          curl -sLO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+          chmod +x antman
+          bash antman -S
+          bash antman --patch=glibc
 
-    - name: Clone KSU & SUSFS
-      run: |
-        # Cloning KernelSU setup script
-        # Cloning SUSFS - explicitly using android13-5.15 branch
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15
-        
-        # Cloning AnyKernel3 for packing
-        git clone https://github.com/TheWildJames/AnyKernel3.git -b android12-5.10 AnyKernel3
+      # ────────────────────────────────────────────────────────
+      # 5. Export toolchain paths & cross-compile variables
+      # ────────────────────────────────────────────────────────
+      - name: 🔧 Export build environment variables
+        run: |
+          CLANG_BIN="${{ env.CLANG_DIR }}/bin"
+          echo "PATH=${CLANG_BIN}:$PATH" >> "$GITHUB_ENV"
+          echo "CROSS_COMPILE=aarch64-linux-gnu-"   >> "$GITHUB_ENV"
+          echo "CROSS_COMPILE_COMPAT=arm-linux-gnueabi-" >> "$GITHUB_ENV"
+          echo "CC=clang"                           >> "$GITHUB_ENV"
+          echo "AR=llvm-ar"                         >> "$GITHUB_ENV"
+          echo "NM=llvm-nm"                         >> "$GITHUB_ENV"
+          echo "OBJCOPY=llvm-objcopy"               >> "$GITHUB_ENV"
+          echo "OBJDUMP=llvm-objdump"               >> "$GITHUB_ENV"
+          echo "STRIP=llvm-strip"                   >> "$GITHUB_ENV"
+          echo "LD=ld.lld"                          >> "$GITHUB_ENV"
+          echo "ARCH=arm64"                         >> "$GITHUB_ENV"
+          echo "SUBARCH=arm64"                      >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_USER=MrPankaj24"       >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_HOST=github-actions"   >> "$GITHUB_ENV"
 
-    - name: Install KernelSU
-      working-directory: android_kernel
-      run: |
-        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+      # ────────────────────────────────────────────────────────
+      # 6. Create output directory
+      # ────────────────────────────────────────────────────────
+      - name: 📁 Create output directory
+        run: mkdir -p "${{ env.KERNEL_OUT }}"
 
-    - name: Patch SUSFS
-      working-directory: android_kernel
-      run: |
-        # 1. Copy header files
-        cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
-        cp ../susfs4ksu/kernel_patches/fs/* ./fs/
+      # ────────────────────────────────────────────────────────
+      # 7. Set ccache for faster re-builds
+      # ────────────────────────────────────────────────────────
+      - name: ⚡ Configure ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ env.DEFCONFIG }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ env.DEFCONFIG }}-
 
-        # 2. Apply Kernel Patch (Android 13 5.15 specific)
-        # We use the patch file specifically for gki-android13-5.15
-        cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch ./
-        patch -p1 < 50_add_susfs_in_gki-android13-5.15.patch
+      # ────────────────────────────────────────────────────────
+      # 8. Generate .config from defconfig
+      # ────────────────────────────────────────────────────────
+      - name: ⚙️ Generate .config (defconfig)
+        working-directory: kernel-source
+        run: |
+          CLANG_BIN="${{ env.CLANG_DIR }}/bin"
+          export PATH="${CLANG_BIN}:${PATH}"
+          make -j$(nproc) \
+            O="${{ env.KERNEL_OUT }}" \
+            ARCH=arm64 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            "${{ env.DEFCONFIG }}"
 
-        # 3. Apply KSU Patch
-        cp ../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
-        cd KernelSU
-        patch -p1 < 10_enable_susfs_for_ksu.patch
+      # ────────────────────────────────────────────────────────
+      # 9. Build the kernel
+      # ────────────────────────────────────────────────────────
+      - name: 🔨 Build kernel (Image + dtbs + modules)
+        working-directory: kernel-source
+        run: |
+          CLANG_BIN="${{ env.CLANG_DIR }}/bin"
+          export PATH="${CLANG_BIN}:${PATH}"
+          make -j$(nproc) \
+            O="${{ env.KERNEL_OUT }}" \
+            ARCH=arm64 \
+            CC=clang \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            KBUILD_BUILD_USER="${{ env.KBUILD_BUILD_USER }}" \
+            KBUILD_BUILD_HOST="${{ env.KBUILD_BUILD_HOST }}" \
+            Image dtbs modules 2>&1 | tee "${{ env.KERNEL_OUT }}/build.log"
 
-    - name: Configure Kernel
-      working-directory: android_kernel
-      run: |
-        # Setup Environment Variables for Toolchain
-        export PATH=$GITHUB_WORKSPACE/toolchain/bin:$PATH
-        export CLANG_TRIPLE=aarch64-linux-gnu-
-        export ARCH=arm64
-        export SUBARCH=arm64
-        
-        # Using the specific defconfig for M14/Exynos 1330
-        make O=out CC=clang s5e8535_defconfig
-
-        # Enable KSU & SUSFS in .config
-        cd out
-        ../scripts/config --file .config \
-            --enable CONFIG_KSU \
-            --enable CONFIG_KSU_SUSFS \
-            --enable CONFIG_KSU_SUSFS_SUS_PATH \
-            --enable CONFIG_KSU_SUSFS_SUS_MOUNT \
-            --enable CONFIG_KSU_SUSFS_SUS_KSTAT \
-            --enable CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
-            --enable CONFIG_KSU_SUSFS_TRY_UMOUNT \
-            --enable CONFIG_KSU_SUSFS_SPOOF_UNAME \
-            --enable CONFIG_KSU_SUSFS_ENABLE_LOG \
-            --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT \
-            --enable CONFIG_KSU_SUSFS_SUS_SU
-
-    - name: Build Kernel
-      working-directory: android_kernel
-      run: |
-        export PATH=$GITHUB_WORKSPACE/toolchain/bin:$PATH
-        export CLANG_TRIPLE=aarch64-linux-gnu-
-        export ARCH=arm64
-        export SUBARCH=arm64
-        
-        # Build the Image
-        make O=out CC=clang -j$(nproc) Image
-
-    - name: Package Kernel
-      run: |
-        if [ -f "android_kernel/out/arch/arm64/boot/Image" ]; then
-            echo "Image found! Packaging..."
-            cp android_kernel/out/arch/arm64/boot/Image AnyKernel3/
-            cd AnyKernel3
-            zip -r9 "../M14-A13-KSU-SUSFS.zip" *
-        else
-            echo "Error: Image not found. Build likely failed."
+      # ────────────────────────────────────────────────────────
+      # 10. Verify kernel image was produced
+      # ────────────────────────────────────────────────────────
+      - name: ✅ Verify kernel image
+        run: |
+          KERNEL_IMAGE="${{ env.KERNEL_OUT }}/arch/arm64/boot/Image"
+          if [ ! -f "$KERNEL_IMAGE" ]; then
+            echo "❌ Kernel image NOT found at $KERNEL_IMAGE"
+            echo "--- Last 100 lines of build log ---"
+            tail -100 "${{ env.KERNEL_OUT }}/build.log"
             exit 1
-        fi
+          fi
+          echo "✅ Kernel image found: $(du -sh $KERNEL_IMAGE | awk '{print $1}')"
+          ls -lh "${{ env.KERNEL_OUT }}/arch/arm64/boot/"
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: M14-KernelSU-SUSFS
-        path: M14-A13-KSU-SUSFS.zip
+      # ────────────────────────────────────────────────────────
+      # 11. Package with AnyKernel3 (optional)
+      # ────────────────────────────────────────────────────────
+      - name: 📦 Package with AnyKernel3
+        if: ${{ github.event.inputs.MAKE_BOOT_IMAGE != 'false' }}
+        run: |
+          git clone --depth=1 "${{ env.ANYKERNEL_REPO }}" AnyKernel3
+          # Copy kernel image
+          cp "${{ env.KERNEL_OUT }}/arch/arm64/boot/Image" AnyKernel3/
+          # Copy DTB if present
+          DTB="${{ env.KERNEL_OUT }}/arch/arm64/boot/dts/exynos/s5e8535.dtb"
+          [ -f "$DTB" ] && cp "$DTB" AnyKernel3/dtb
+          # Copy DTBO if present
+          DTBO="${{ env.KERNEL_OUT }}/arch/arm64/boot/dtbo.img"
+          [ -f "$DTBO" ] && cp "$DTBO" AnyKernel3/dtbo.img
+
+          # Set AnyKernel3 device properties
+          sed -i "s/^kernel.string=.*/kernel.string=MrPankaj24 Custom Kernel for ${{ env.DEVICE_MODEL }}/" AnyKernel3/anykernel.sh
+          sed -i "s/^device.name1=.*/device.name1=${{ env.DEVICE_MODEL }}/" AnyKernel3/anykernel.sh
+
+          # Build the flashable zip
+          TIMESTAMP="$(date +%Y%m%d-%H%M)"
+          ZIP_NAME="CustomKernel-${{ env.DEVICE_MODEL }}-${TIMESTAMP}.zip"
+          cd AnyKernel3 && zip -r9 "../${ZIP_NAME}" . -x ".git/*" "*.placeholder"
+          cd ..
+
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          echo "✅ AnyKernel3 zip created: ${ZIP_NAME} ($(du -sh ${ZIP_NAME} | awk '{print $1}'))"
+
+      # ────────────────────────────────────────────────────────
+      # 12. Collect build artefacts
+      # ────────────────────────────────────────────────────────
+      - name: 📂 Collect artefacts
+        run: |
+          mkdir -p artefacts
+          # Raw kernel image
+          cp "${{ env.KERNEL_OUT }}/arch/arm64/boot/Image" artefacts/
+          # DTB / DTBO (optional)
+          DTB="${{ env.KERNEL_OUT }}/arch/arm64/boot/dts/exynos/s5e8535.dtb"
+          DTBO="${{ env.KERNEL_OUT }}/arch/arm64/boot/dtbo.img"
+          [ -f "$DTB"  ] && cp "$DTB"  artefacts/
+          [ -f "$DTBO" ] && cp "$DTBO" artefacts/
+          # Build log
+          cp "${{ env.KERNEL_OUT }}/build.log" artefacts/
+          # AnyKernel3 zip
+          [ -f "${{ env.ZIP_NAME }}" ] && cp "${{ env.ZIP_NAME }}" artefacts/
+
+          echo "--- Artefacts ---"
+          ls -lh artefacts/
+
+      # ────────────────────────────────────────────────────────
+      # 13. Upload artefacts to GitHub Actions
+      # ────────────────────────────────────────────────────────
+      - name: ⬆️ Upload build artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: "SM-M146B-Kernel-${{ github.run_number }}"
+          path: artefacts/
+          retention-days: 30
+
+      # ────────────────────────────────────────────────────────
+      # 14. Create a GitHub Release (on main-branch push only)
+      # ────────────────────────────────────────────────────────
+      - name: 🚀 Create GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "kernel-${{ github.run_number }}"
+          name: "Custom Kernel – ${{ env.DEVICE_MODEL }} – Build #${{ github.run_number }}"
+          body: |
+            ## 🔨 Automated kernel build
+
+            | Property | Value |
+            |---|---|
+            | **Device** | ${{ env.DEVICE_MODEL }} (${{ env.DEVICE_CODENAME }}) |
+            | **SoC** | ${{ env.TARGET_SOC }} |
+            | **Defconfig** | ${{ env.DEFCONFIG }} |
+            | **Source branch** | ${{ env.KERNEL_BRANCH }} |
+            | **Toolchain** | Neutron-Clang (latest) |
+            | **Build #** | ${{ github.run_number }} |
+            | **Commit** | ${{ github.sha }} |
+
+            > Flash with TWRP / any custom recovery that supports AnyKernel3.
+          files: artefacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
