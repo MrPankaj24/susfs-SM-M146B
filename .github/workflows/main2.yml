@@ -1,36 +1,20 @@
-name: 🔨 Build Kernel - SM-M146B (Android 15 / One UI 7)
+name: 🏗️ Build Kernel (s5e8535 / M14)
 
 on:
-  # Trigger manually from Actions tab
-  workflow_dispatch:
-    inputs:
-      android_version:
-        description: 'Android Version (e.g. 15)'
-        required: true
-        default: '15'
-      android_major_version:
-        description: 'Android Major Version letter (e.g. v for Android 15)'
-        required: true
-        default: 'v'
-  # Also trigger on push to main
   push:
-    branches:
-      - main
-    paths-ignore:
-      - '**.md'
-      - '.github/**'
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
     name: 🏗️ Build Kernel (s5e8535 / M14)
-    runs-on: ubuntu-22.04
-    # Kernel builds can take a long time
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
-      # ─────────────────────────────────────────────
-      # 1. Checkout kernel source
-      # ─────────────────────────────────────────────
+      # ─── 1. Checkout kernel source ───────────────────────────────────────────
       - name: 📥 Checkout Kernel Source
         uses: actions/checkout@v4
         with:
@@ -39,241 +23,175 @@ jobs:
           path: SM-M146B-Kernel-Source
           fetch-depth: 1
 
-      # ─────────────────────────────────────────────
-      # 2. Install ALL required build dependencies
-      #    (mirrors what Codespace had installed)
-      # ─────────────────────────────────────────────
-      - name: 📦 Install Build Dependencies
+      # ─── 2. Cache apt packages ───────────────────────────────────────────────
+      - name: 📦 Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-kernel-build-v1
+          restore-keys: apt-${{ runner.os }}-
+
+      # ─── 3. Install build dependencies ──────────────────────────────────────
+      - name: 🔧 Install Build Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y \
-            git \
-            make \
-            bc \
-            bison \
-            flex \
-            libssl-dev \
-            libelf-dev \
-            binutils \
-            binutils-aarch64-linux-gnu \
-            gcc \
-            gcc-aarch64-linux-gnu \
-            g++ \
-            cpio \
-            zip \
-            unzip \
-            curl \
-            wget \
-            python3 \
-            python3-pip \
-            perl \
-            libncurses-dev \
-            libncurses5-dev \
-            cmake \
-            ninja-build \
-            lld \
-            llvm \
-            clang \
-            dwarves \
-            pahole \
+            git make bc bison flex \
+            libssl-dev libelf-dev \
+            binutils binutils-aarch64-linux-gnu \
+            gcc gcc-aarch64-linux-gnu \
+            g++ cpio zip unzip \
+            curl wget \
+            python3 python3-pip perl \
+            libncurses-dev libncurses5-dev \
+            cmake ninja-build \
+            lld llvm clang \
+            dwarves pahole \
             ccache \
             device-tree-compiler \
-            xz-utils \
-            zlib1g-dev \
-            libc6-dev-i386
+            xz-utils zlib1g-dev libc6-dev-i386
+          echo "✅ All dependencies installed"
 
-      # ─────────────────────────────────────────────
-      # 3. Download Samsung/Android Toolchain
-      #    (same clang-r450784d used in build_kernel.sh)
-      # ─────────────────────────────────────────────
-      - name: 🔧 Setup Android Clang Toolchain (clang-r450784d)
+      # ─── 4. Print tool versions ──────────────────────────────────────────────
+      - name: 🔍 Print Tool Versions
+        run: |
+          echo "=== Clang ==="
+          clang --version
+          echo "=== aarch64-linux-gnu-gcc ==="
+          aarch64-linux-gnu-gcc --version
+          echo "=== Make ==="
+          make --version | head -1
+          echo "=== Pahole ==="
+          pahole --version
+          echo "=== Python ==="
+          python3 --version
+
+      # ─── 5. Fix CONFIG_DEBUG_INFO_BTF (pahole version compatibility) ─────────
+      - name: 🩹 Disable CONFIG_DEBUG_INFO_BTF (BTF build fix)
         working-directory: SM-M146B-Kernel-Source
         run: |
-          mkdir -p toolchain/clang/host/linux-x86
-          mkdir -p toolchain/build/kernel/build-tools
-          mkdir -p toolchain/prebuilts/kernel-build-tools
+          # Fix the BTF/pahole error: "Failed to generate BTF for vmlinux"
+          DEFCONFIG="arch/arm64/configs/s5e8535-m14xnsxx_defconfig"
+          if [ -f "$DEFCONFIG" ]; then
+            # Remove any existing BTF config lines
+            sed -i '/CONFIG_DEBUG_INFO_BTF/d' "$DEFCONFIG"
+            # Explicitly disable it
+            echo "CONFIG_DEBUG_INFO_BTF=n" >> "$DEFCONFIG"
+            echo "✅ CONFIG_DEBUG_INFO_BTF=n added to defconfig"
+          else
+            echo "⚠️  Defconfig not found at $DEFCONFIG, will patch .config after make defconfig"
+          fi
 
-          echo "⬇️ Downloading clang-r450784d..."
-          wget -q --show-progress \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r450784d.tar.gz \
-            -O /tmp/clang.tar.gz || \
-          # Fallback: use GitHub mirror
-          wget -q --show-progress \
-            https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20220825-release/Clang-14.0.6-20220825.tar.gz \
-            -O /tmp/clang.tar.gz
-
-          echo "📦 Extracting clang..."
-          mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
-          tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
-          rm /tmp/clang.tar.gz
-
-          echo "✅ Clang version:"
-          toolchain/clang/host/linux-x86/clang-r450784d/bin/clang --version || true
-
-      - name: 🔧 Setup Kernel Build Tools
-        working-directory: SM-M146B-Kernel-Source
-        run: |
-          echo "⬇️ Downloading kernel build tools..."
-          # Use prebuilt kernel build tools from AOSP
-          git clone --depth=1 \
-            https://android.googlesource.com/platform/prebuilts/build-tools \
-            toolchain/build/kernel/build-tools || \
-          # Fallback: use system tools (already installed via apt)
-          echo "⚠️ Using system build tools as fallback"
-
-          git clone --depth=1 \
-            https://android.googlesource.com/kernel/prebuilts/build-tools \
-            toolchain/prebuilts/kernel-build-tools || \
-          echo "⚠️ Using system kernel build tools as fallback"
-
-      # ─────────────────────────────────────────────
-      # 4. Setup ccache for faster rebuilds
-      # ─────────────���───────────────────────────────
-      - name: ⚡ Setup ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-kernel-sm-m146b-${{ github.sha }}
-          restore-keys: |
-            ccache-kernel-sm-m146b-
-
-      - name: ⚡ Configure ccache
-        run: |
-          ccache --max-size=5G
-          ccache --zero-stats
-
-      # ─────────────────────────────────────────────
-      # 5. Build the Kernel
-      # ─────────────────────────────────────────────
-      - name: 🔨 Build Kernel (Android 15 / One UI 7)
+      # ─── 6. Build the Kernel ─────────────────────────────────────────────────
+      - name: 🔨 Build Kernel
         working-directory: SM-M146B-Kernel-Source
         env:
-          ANDROID_VERSION: ${{ github.event.inputs.android_version || '15' }}
-          ANDROID_MAJOR_LETTER: ${{ github.event.inputs.android_major_version || 'v' }}
+          PLATFORM_VERSION: "15"
+          ANDROID_MAJOR_VERSION: "v"
+          ARCH: arm64
+          SUBARCH: arm64
+          TARGET_SOC: s5e8535
+          LLVM: "1"
+          LLVM_IAS: "1"
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CC: clang
+          LD: ld.lld
+          AR: llvm-ar
+          NM: llvm-nm
+          OBJCOPY: llvm-objcopy
+          OBJDUMP: llvm-objdump
+          STRIP: llvm-strip
+          DEPMOD: depmod
+          DTC_FLAGS: "-@"
         run: |
-          # ── Toolchain paths (mirroring build_kernel.sh) ──
-          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
-          export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86:$PATH
+          set -e
 
-          # Check if custom sysroot exists, else fallback to system
-          if [ -d "$(pwd)/toolchain/build/kernel/build-tools/sysroot" ]; then
-            export HOSTCFLAGS="--sysroot=$(pwd)/toolchain/build/kernel/build-tools/sysroot \
-              -I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
-            export HOSTLDFLAGS="--sysroot=$(pwd)/toolchain/build/kernel/build-tools/sysroot \
-              -Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 \
-              -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 \
-              -fuse-ld=lld --rtlib=compiler-rt"
-          else
-            echo "⚠️ Using system sysroot (custom sysroot not found)"
-          fi
-
-          # ── Android version exports ──
-          export PLATFORM_VERSION=${ANDROID_VERSION}
-          export ANDROID_MAJOR_VERSION=${ANDROID_MAJOR_LETTER}
-
-          # ── Kernel build flags ──
-          export DTC_FLAGS="-@"
-          export LLVM=1
-          export DEPMOD=depmod
-          export ARCH=arm64
-          export TARGET_SOC=s5e8535
-
-          # ── Optional: enable ccache ──
-          export CC="ccache clang"
-          export CXX="ccache clang++"
-
-          # ── Show tool versions ──
-          echo "===== Build Environment ====="
-          echo "PLATFORM_VERSION  = ${PLATFORM_VERSION}"
-          echo "ANDROID_MAJOR     = ${ANDROID_MAJOR_VERSION}"
-          echo "Clang version:"
-          clang --version 2>/dev/null || echo "clang not in PATH"
-          echo "Make version:"
-          make --version | head -1
-          echo "pahole version:"
-          pahole --version 2>/dev/null || echo "pahole not found"
-          echo "============================="
+          echo "========================================"
+          echo " Building Samsung Galaxy M14 Kernel"
+          echo " SoC  : s5e8535 (Exynos 1330)"
+          echo " OS   : Android $PLATFORM_VERSION (One UI 7)"
+          echo " Arch : $ARCH"
+          echo " CC   : $(clang --version | head -1)"
+          echo "========================================"
 
           # ── Generate .config from defconfig ──
-          echo "📋 Generating .config from s5e8535-m14xnsxx_defconfig..."
-          make ARCH=arm64 s5e8535-m14xnsxx_defconfig
+          echo "→ Generating .config from s5e8535-m14xnsxx_defconfig..."
+          make s5e8535-m14xnsxx_defconfig
 
-          # ── Fix: disable BTF if pahole is not working ──
-          if ! pahole --version &>/dev/null; then
-            echo "⚠️ pahole not available — disabling CONFIG_DEBUG_INFO_BTF"
-            scripts/config --file .config --disable CONFIG_DEBUG_INFO_BTF
-            make ARCH=arm64 olddefconfig
-          fi
+          # ── Apply BTF fix in .config (belt-and-suspenders) ──
+          echo "→ Patching .config: disabling CONFIG_DEBUG_INFO_BTF..."
+          scripts/config --disable CONFIG_DEBUG_INFO_BTF 2>/dev/null || \
+            sed -i 's/CONFIG_DEBUG_INFO_BTF=y/CONFIG_DEBUG_INFO_BTF=n/g' .config
 
-          # ── Build kernel ──
-          echo "🔨 Starting kernel build..."
-          make ARCH=arm64 \
-               LLVM=1 \
-               -j$(nproc) \
-               2>&1 | tee ../build.log
+          # Also ensure it's not set if not present
+          grep -q "CONFIG_DEBUG_INFO_BTF" .config || echo "# CONFIG_DEBUG_INFO_BTF is not set" >> .config
 
-          echo "✅ Kernel build finished!"
+          # ── Show final BTF config ──
+          echo "→ BTF config status:"
+          grep "CONFIG_DEBUG_INFO_BTF" .config || echo "  (not set)"
 
-      # ─────────────────────────────────────────────
-      # 6. Collect output artifacts
-      # ─────────────────────────────────────────────
-      - name: 📦 Collect Kernel Artifacts
-        if: success()
+          # ── Build ──
+          echo "→ Starting kernel build..."
+          make -j$(nproc) \
+            ARCH=$ARCH \
+            SUBARCH=$SUBARCH \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            PLATFORM_VERSION=$PLATFORM_VERSION \
+            ANDROID_MAJOR_VERSION=$ANDROID_MAJOR_VERSION \
+            TARGET_SOC=$TARGET_SOC \
+            DEPMOD=depmod \
+            DTC_FLAGS="-@" \
+            2>&1 | tee ../build.log
+
+          echo "✅ Kernel build completed!"
+
+      # ─── 7. Verify output files ──────────────────────────────────────────────
+      - name: ✅ Verify Build Output
         working-directory: SM-M146B-Kernel-Source
         run: |
-          mkdir -p ../output
-
-          # Copy kernel image
-          if [ -f arch/arm64/boot/Image ]; then
-            cp arch/arm64/boot/Image ../output/
-            echo "✅ Image copied"
+          echo "=== Checking build outputs ==="
+          if [ -f "arch/arm64/boot/Image" ]; then
+            echo "✅ Image found: $(ls -lh arch/arm64/boot/Image)"
+          else
+            echo "❌ Image NOT found!"
+            exit 1
           fi
 
-          if [ -f arch/arm64/boot/Image.gz ]; then
-            cp arch/arm64/boot/Image.gz ../output/
-            echo "✅ Image.gz copied"
+          if [ -f "arch/arm64/boot/Image.gz" ]; then
+            echo "✅ Image.gz found: $(ls -lh arch/arm64/boot/Image.gz)"
           fi
 
-          # Copy DTBs
-          if [ -f arch/arm64/boot/dts/exynos/s5e8535.dtb ]; then
-            mkdir -p ../output/dtbs
-            cp arch/arm64/boot/dts/exynos/s5e8535*.dtb ../output/dtbs/ 2>/dev/null || true
-            echo "✅ DTBs copied"
+          # Check for DTS output
+          if ls arch/arm64/boot/dts/exynos/s5e8535*.dtb 2>/dev/null; then
+            echo "✅ DTB files found"
           fi
 
-          # Copy modules
-          find . -name "*.ko" -exec cp {} ../output/ \; 2>/dev/null || true
-
-          # Copy System.map and config
-          cp System.map ../output/ 2>/dev/null || true
-          cp .config ../output/kernel.config 2>/dev/null || true
-
-          echo "===== Output files ====="
-          ls -lh ../output/
-          echo "======================="
-
-      # ─────────────────────────────────────────────
-      # 7. Upload artifacts
-      # ─────────────────────────────────────────────
-      - name: 📤 Upload Kernel Image
-        if: success()
+      # ─── 8. Upload kernel artifacts ──────────────────────────────────────────
+      - name: 📤 Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: kernel-SM-M146B-Android15-${{ github.run_number }}
-          path: output/
+          name: kernel-m14-android15-oneui7-${{ github.run_number }}
+          path: |
+            SM-M146B-Kernel-Source/arch/arm64/boot/Image
+            SM-M146B-Kernel-Source/arch/arm64/boot/Image.gz
+            SM-M146B-Kernel-Source/arch/arm64/boot/dts/exynos/s5e8535*.dtb
           retention-days: 30
 
-      - name: 📤 Upload Build Log
-        if: always()
+      # ─── 9. Upload build log (always, for debugging) ─────────────────────────
+      - name: 📋 Upload Build Log
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: build-log-${{ github.run_number }}
           path: build.log
           retention-days: 7
-
-      # ─────────────────────────────────────────────
-      # 8. Print ccache stats
-      # ─────────────────────────────────────────────
-      - name: 📊 ccache Stats
-        if: always()
-        run: ccache --show-stats
