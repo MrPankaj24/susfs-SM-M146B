@@ -18,7 +18,7 @@ jobs:
 
     env:
       # We set this globally so all steps can read it
-      SUSFS_BRANCH: "gki-android14-5.15"
+      SUSFS_BRANCH: "gki-android13-5.15"
 
     steps:
       # ──────────────────────────────────────────────
