@@ -1,302 +1,279 @@
-name: 🔨 Build SM-M146B Custom Kernel
+name: 🔨 Build Kernel - SM-M146B (Android 15 / One UI 7)
 
 on:
+  # Trigger manually from Actions tab
   workflow_dispatch:
     inputs:
-      KERNEL_BRANCH:
-        description: "Kernel source branch"
+      android_version:
+        description: 'Android Version (e.g. 15)'
         required: true
-        default: "main"
-      DEFCONFIG:
-        description: "Defconfig name (e.g. erd8535_t_gki_defconfig)"
+        default: '15'
+      android_major_version:
+        description: 'Android Major Version letter (e.g. v for Android 15)'
         required: true
-        default: "erd8535_t_gki_defconfig"
-      MAKE_BOOT_IMAGE:
-        description: "Package output into AnyKernel3 zip?"
-        required: true
-        type: boolean
-        default: true
-
+        default: 'v'
+  # Also trigger on push to main
   push:
     branches:
       - main
-    paths:
-      - ".github/workflows/build-kernel.yml"
-
-env:
-  # ──────────────────────────────────────────────────────────────
-  # Kernel source repository (your fork/source)
-  # ──────────────────────────────────────────────────────────────
-  KERNEL_REPO: "https://github.com/MrPankaj24/SM-M146B-Kernel-Source.git"
-  KERNEL_BRANCH: ${{ github.event.inputs.KERNEL_BRANCH || 'main' }}
-
-  # ──────────────────────────────────────────────────────────────
-  # Device / build configuration
-  # ──────────────────────────────────────────────────────────────
-  DEVICE_MODEL:   "SM-M146B"
-  DEVICE_CODENAME: "m14x"
-  TARGET_ARCH:    "arm64"
-  TARGET_SOC:     "s5e8535"
-
-  # Defconfig
-  DEFCONFIG:      ${{ github.event.inputs.DEFCONFIG || 'erd8535_t_gki_defconfig' }}
-
-  # ──────────────────────────────────────────────────────────────
-  # Toolchain – Neutron-Clang (latest) is used for kernel 6.1
-  # ──────────────────────────────────────────────────────────────
-  CLANG_DIR:      "${{ github.workspace }}/toolchains/neutron-clang"
-
-  # ──────────────────────────────────────────────────────────────
-  # Build output
-  # ──────────────────────────────────────────────────────────────
-  KERNEL_OUT:     "${{ github.workspace }}/out"
-  ANYKERNEL_REPO: "https://github.com/osm0sis/AnyKernel3.git"
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
 
 jobs:
   build:
-    name: 🏗️ Build Kernel (${{ github.event.inputs.DEFCONFIG || 'erd8535_t_gki_defconfig' }})
+    name: 🏗️ Build Kernel (s5e8535 / M14)
     runs-on: ubuntu-22.04
-    # Give the job a generous timeout for large kernel builds
+    # Kernel builds can take a long time
     timeout-minutes: 120
 
     steps:
-      # ────────────────────────────────────────────────────────
-      # 1. Checkout this (workflow) repo
-      # ────────────────────────────────────────────────────────
-      - name: 📥 Checkout workflow repo
+      # ─────────────────────────────────────────────
+      # 1. Checkout kernel source
+      # ─────────────────────────────────────────────
+      - name: 📥 Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          path: workflow-repo
+          repository: MrPankaj24/SM-M146B-Kernel-Source
+          ref: main
+          path: SM-M146B-Kernel-Source
+          fetch-depth: 1
 
-      # ────────────────────────────────────────────────────────
-      # 2. Install build dependencies
-      # ────────────────────────────────────────────────────────
-      - name: 📦 Install build dependencies
+      # ─────────────────────────────────────────────
+      # 2. Install ALL required build dependencies
+      #    (mirrors what Codespace had installed)
+      # ─────────────────────────────────────────────
+      - name: 📦 Install Build Dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            git device-tree-compiler lz4 xz-utils zlib1g-dev \
-            openjdk-17-jdk gcc g++ python3 python-is-python3 \
-            p7zip-full android-sdk-libsparse-utils erofs-utils \
-            gnupg flex bison gperf build-essential zip curl \
-            libc6-dev libncurses-dev libx11-dev libreadline-dev \
-            libgl1 libgl1-mesa-dev make bc grep tofrodos \
-            python3-markdown libxml2-utils xsltproc \
-            libc6-dev libtinfo6 cpio kmod openssl libelf-dev \
-            pahole libssl-dev libarchive-tools zstd rsync \
-            binutils-aarch64-linux-gnu ca-certificates ccache
-          # libtinfo5 shim needed by some older host tools
-          wget -q http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
-          sudo dpkg -i libtinfo5_6.3-2ubuntu0.1_amd64.deb
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            git \
+            make \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            binutils \
+            binutils-aarch64-linux-gnu \
+            gcc \
+            gcc-aarch64-linux-gnu \
+            g++ \
+            cpio \
+            zip \
+            unzip \
+            curl \
+            wget \
+            python3 \
+            python3-pip \
+            perl \
+            libncurses-dev \
+            libncurses5-dev \
+            cmake \
+            ninja-build \
+            lld \
+            llvm \
+            clang \
+            dwarves \
+            pahole \
+            ccache \
+            device-tree-compiler \
+            xz-utils \
+            zlib1g-dev \
+            libc6-dev-i386
 
-      # ────────────────────────────────────────────────────────
-      # 3. Clone kernel source (shallow clone for speed)
-      # ────────────────────────────────────────────────────────
-      - name: 📥 Clone kernel source
+      # ─────────────────────────────────────────────
+      # 3. Download Samsung/Android Toolchain
+      #    (same clang-r450784d used in build_kernel.sh)
+      # ─────────────────────────────────────────────
+      - name: 🔧 Setup Android Clang Toolchain (clang-r450784d)
+        working-directory: SM-M146B-Kernel-Source
         run: |
-          echo "[INFO] Cloning ${{ env.KERNEL_REPO }} @ ${{ env.KERNEL_BRANCH }}"
+          mkdir -p toolchain/clang/host/linux-x86
+          mkdir -p toolchain/build/kernel/build-tools
+          mkdir -p toolchain/prebuilts/kernel-build-tools
+
+          echo "⬇️ Downloading clang-r450784d..."
+          wget -q --show-progress \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r450784d.tar.gz \
+            -O /tmp/clang.tar.gz || \
+          # Fallback: use GitHub mirror
+          wget -q --show-progress \
+            https://github.com/ZyCromerZ/Clang/releases/download/14.0.6-20220825-release/Clang-14.0.6-20220825.tar.gz \
+            -O /tmp/clang.tar.gz
+
+          echo "📦 Extracting clang..."
+          mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
+          tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
+          rm /tmp/clang.tar.gz
+
+          echo "✅ Clang version:"
+          toolchain/clang/host/linux-x86/clang-r450784d/bin/clang --version || true
+
+      - name: 🔧 Setup Kernel Build Tools
+        working-directory: SM-M146B-Kernel-Source
+        run: |
+          echo "⬇️ Downloading kernel build tools..."
+          # Use prebuilt kernel build tools from AOSP
           git clone --depth=1 \
-            --branch "$({{ env.KERNEL_BRANCH }})" \
-            "${{ env.KERNEL_REPO }}" \
-            kernel-source
-          echo "KERNEL_SOURCE=${{ github.workspace }}/kernel-source" >> "$GITHUB_ENV"
+            https://android.googlesource.com/platform/prebuilts/build-tools \
+            toolchain/build/kernel/build-tools || \
+          # Fallback: use system tools (already installed via apt)
+          echo "⚠️ Using system build tools as fallback"
 
-      # ────────────────────────────────────────────────────────
-      # 4. Set up Neutron-Clang toolchain (cached)
-      # ────────────────────────────────────────────────────────
-      - name: 🔧 Cache Neutron-Clang toolchain
-        id: cache-clang
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CLANG_DIR }}
-          key: neutron-clang-${{ runner.os }}-v1
+          git clone --depth=1 \
+            https://android.googlesource.com/kernel/prebuilts/build-tools \
+            toolchain/prebuilts/kernel-build-tools || \
+          echo "⚠️ Using system kernel build tools as fallback"
 
-      - name: 🔧 Download Neutron-Clang (if not cached)
-        if: steps.cache-clang.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p "${{ env.CLANG_DIR }}"
-          cd "${{ env.CLANG_DIR }}"
-          curl -sLO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
-          chmod +x antman
-          bash antman -S
-          bash antman --patch=glibc
-
-      # ────────────────────────────────────────────────────────
-      # 5. Export toolchain paths & cross-compile variables
-      # ────────────────────────────────────────────────────────
-      - name: 🔧 Export build environment variables
-        run: |
-          CLANG_BIN="${{ env.CLANG_DIR }}/bin"
-          echo "PATH=${CLANG_BIN}:$PATH" >> "$GITHUB_ENV"
-          echo "CROSS_COMPILE=aarch64-linux-gnu-"   >> "$GITHUB_ENV"
-          echo "CROSS_COMPILE_COMPAT=arm-linux-gnueabi-" >> "$GITHUB_ENV"
-          echo "CC=clang"                           >> "$GITHUB_ENV"
-          echo "AR=llvm-ar"                         >> "$GITHUB_ENV"
-          echo "NM=llvm-nm"                         >> "$GITHUB_ENV"
-          echo "OBJCOPY=llvm-objcopy"               >> "$GITHUB_ENV"
-          echo "OBJDUMP=llvm-objdump"               >> "$GITHUB_ENV"
-          echo "STRIP=llvm-strip"                   >> "$GITHUB_ENV"
-          echo "LD=ld.lld"                          >> "$GITHUB_ENV"
-          echo "ARCH=arm64"                         >> "$GITHUB_ENV"
-          echo "SUBARCH=arm64"                      >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_USER=MrPankaj24"       >> "$GITHUB_ENV"
-          echo "KBUILD_BUILD_HOST=github-actions"   >> "$GITHUB_ENV"
-
-      # ────────────────────────────────────────────────────────
-      # 6. Create output directory
-      # ────────────────────────────────────────────────────────
-      - name: 📁 Create output directory
-        run: mkdir -p "${{ env.KERNEL_OUT }}"
-
-      # ────────────────────────────────────────────────────────
-      # 7. Set ccache for faster re-builds
-      # ────────────────────────────────────────────────────────
-      - name: ⚡ Configure ccache
+      # ─────────────────────────────────────────────
+      # 4. Setup ccache for faster rebuilds
+      # ─────────────���───────────────────────────────
+      - name: ⚡ Setup ccache
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ env.DEFCONFIG }}-${{ github.sha }}
+          key: ccache-kernel-sm-m146b-${{ github.sha }}
           restore-keys: |
-            ccache-${{ env.DEFCONFIG }}-
+            ccache-kernel-sm-m146b-
 
-      # ────────────────────────────────────────────────────────
-      # 8. Generate .config from defconfig
-      # ────────────────────────────────────────────────────────
-      - name: ⚙️ Generate .config (defconfig)
-        working-directory: kernel-source
+      - name: ⚡ Configure ccache
         run: |
-          CLANG_BIN="${{ env.CLANG_DIR }}/bin"
-          export PATH="${CLANG_BIN}:${PATH}"
-          make -j$(nproc) \
-            O="${{ env.KERNEL_OUT }}" \
-            ARCH=arm64 \
-            CC=clang \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            "${{ env.DEFCONFIG }}"
+          ccache --max-size=5G
+          ccache --zero-stats
 
-      # ────────────────────────────────────────────────────────
-      # 9. Build the kernel
-      # ────────────────────────────────────────────────────────
-      - name: 🔨 Build kernel (Image + dtbs + modules)
-        working-directory: kernel-source
+      # ─────────────────────────────────────────────
+      # 5. Build the Kernel
+      # ─────────────────────────────────────────────
+      - name: 🔨 Build Kernel (Android 15 / One UI 7)
+        working-directory: SM-M146B-Kernel-Source
+        env:
+          ANDROID_VERSION: ${{ github.event.inputs.android_version || '15' }}
+          ANDROID_MAJOR_LETTER: ${{ github.event.inputs.android_major_version || 'v' }}
         run: |
-          CLANG_BIN="${{ env.CLANG_DIR }}/bin"
-          export PATH="${CLANG_BIN}:${PATH}"
-          make -j$(nproc) \
-            O="${{ env.KERNEL_OUT }}" \
-            ARCH=arm64 \
-            CC=clang \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            KBUILD_BUILD_USER="${{ env.KBUILD_BUILD_USER }}" \
-            KBUILD_BUILD_HOST="${{ env.KBUILD_BUILD_HOST }}" \
-            Image dtbs modules 2>&1 | tee "${{ env.KERNEL_OUT }}/build.log"
+          # ── Toolchain paths (mirroring build_kernel.sh) ──
+          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
+          export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86:$PATH
 
-      # ────────────────────────────────────────────────────────
-      # 10. Verify kernel image was produced
-      # ────────────────────────────────────────────────────────
-      - name: ✅ Verify kernel image
-        run: |
-          KERNEL_IMAGE="${{ env.KERNEL_OUT }}/arch/arm64/boot/Image"
-          if [ ! -f "$KERNEL_IMAGE" ]; then
-            echo "❌ Kernel image NOT found at $KERNEL_IMAGE"
-            echo "--- Last 100 lines of build log ---"
-            tail -100 "${{ env.KERNEL_OUT }}/build.log"
-            exit 1
+          # Check if custom sysroot exists, else fallback to system
+          if [ -d "$(pwd)/toolchain/build/kernel/build-tools/sysroot" ]; then
+            export HOSTCFLAGS="--sysroot=$(pwd)/toolchain/build/kernel/build-tools/sysroot \
+              -I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
+            export HOSTLDFLAGS="--sysroot=$(pwd)/toolchain/build/kernel/build-tools/sysroot \
+              -Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 \
+              -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 \
+              -fuse-ld=lld --rtlib=compiler-rt"
+          else
+            echo "⚠️ Using system sysroot (custom sysroot not found)"
           fi
-          echo "✅ Kernel image found: $(du -sh $KERNEL_IMAGE | awk '{print $1}')"
-          ls -lh "${{ env.KERNEL_OUT }}/arch/arm64/boot/"
 
-      # ────────────────────────────────────────────────────────
-      # 11. Package with AnyKernel3 (optional)
-      # ────────────────────────────────────────────────────────
-      - name: 📦 Package with AnyKernel3
-        if: ${{ github.event.inputs.MAKE_BOOT_IMAGE != 'false' }}
+          # ── Android version exports ──
+          export PLATFORM_VERSION=${ANDROID_VERSION}
+          export ANDROID_MAJOR_VERSION=${ANDROID_MAJOR_LETTER}
+
+          # ── Kernel build flags ──
+          export DTC_FLAGS="-@"
+          export LLVM=1
+          export DEPMOD=depmod
+          export ARCH=arm64
+          export TARGET_SOC=s5e8535
+
+          # ── Optional: enable ccache ──
+          export CC="ccache clang"
+          export CXX="ccache clang++"
+
+          # ── Show tool versions ──
+          echo "===== Build Environment ====="
+          echo "PLATFORM_VERSION  = ${PLATFORM_VERSION}"
+          echo "ANDROID_MAJOR     = ${ANDROID_MAJOR_VERSION}"
+          echo "Clang version:"
+          clang --version 2>/dev/null || echo "clang not in PATH"
+          echo "Make version:"
+          make --version | head -1
+          echo "pahole version:"
+          pahole --version 2>/dev/null || echo "pahole not found"
+          echo "============================="
+
+          # ── Generate .config from defconfig ──
+          echo "📋 Generating .config from s5e8535-m14xnsxx_defconfig..."
+          make ARCH=arm64 s5e8535-m14xnsxx_defconfig
+
+          # ── Fix: disable BTF if pahole is not working ──
+          if ! pahole --version &>/dev/null; then
+            echo "⚠️ pahole not available — disabling CONFIG_DEBUG_INFO_BTF"
+            scripts/config --file .config --disable CONFIG_DEBUG_INFO_BTF
+            make ARCH=arm64 olddefconfig
+          fi
+
+          # ── Build kernel ──
+          echo "🔨 Starting kernel build..."
+          make ARCH=arm64 \
+               LLVM=1 \
+               -j$(nproc) \
+               2>&1 | tee ../build.log
+
+          echo "✅ Kernel build finished!"
+
+      # ─────────────────────────────────────────────
+      # 6. Collect output artifacts
+      # ─────────────────────────────────────────────
+      - name: 📦 Collect Kernel Artifacts
+        if: success()
+        working-directory: SM-M146B-Kernel-Source
         run: |
-          git clone --depth=1 "${{ env.ANYKERNEL_REPO }}" AnyKernel3
+          mkdir -p ../output
+
           # Copy kernel image
-          cp "${{ env.KERNEL_OUT }}/arch/arm64/boot/Image" AnyKernel3/
-          # Copy DTB if present
-          DTB="${{ env.KERNEL_OUT }}/arch/arm64/boot/dts/exynos/s5e8535.dtb"
-          [ -f "$DTB" ] && cp "$DTB" AnyKernel3/dtb
-          # Copy DTBO if present
-          DTBO="${{ env.KERNEL_OUT }}/arch/arm64/boot/dtbo.img"
-          [ -f "$DTBO" ] && cp "$DTBO" AnyKernel3/dtbo.img
+          if [ -f arch/arm64/boot/Image ]; then
+            cp arch/arm64/boot/Image ../output/
+            echo "✅ Image copied"
+          fi
 
-          # Set AnyKernel3 device properties
-          sed -i "s/^kernel.string=.*/kernel.string=MrPankaj24 Custom Kernel for ${{ env.DEVICE_MODEL }}/" AnyKernel3/anykernel.sh
-          sed -i "s/^device.name1=.*/device.name1=${{ env.DEVICE_MODEL }}/" AnyKernel3/anykernel.sh
+          if [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz ../output/
+            echo "✅ Image.gz copied"
+          fi
 
-          # Build the flashable zip
-          TIMESTAMP="$(date +%Y%m%d-%H%M)"
-          ZIP_NAME="CustomKernel-${{ env.DEVICE_MODEL }}-${TIMESTAMP}.zip"
-          cd AnyKernel3 && zip -r9 "../${ZIP_NAME}" . -x ".git/*" "*.placeholder"
-          cd ..
+          # Copy DTBs
+          if [ -f arch/arm64/boot/dts/exynos/s5e8535.dtb ]; then
+            mkdir -p ../output/dtbs
+            cp arch/arm64/boot/dts/exynos/s5e8535*.dtb ../output/dtbs/ 2>/dev/null || true
+            echo "✅ DTBs copied"
+          fi
 
-          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
-          echo "✅ AnyKernel3 zip created: ${ZIP_NAME} ($(du -sh ${ZIP_NAME} | awk '{print $1}'))"
+          # Copy modules
+          find . -name "*.ko" -exec cp {} ../output/ \; 2>/dev/null || true
 
-      # ────────────────────────────────────────────────────────
-      # 12. Collect build artefacts
-      # ────────────────────────────────────────────────────────
-      - name: 📂 Collect artefacts
-        run: |
-          mkdir -p artefacts
-          # Raw kernel image
-          cp "${{ env.KERNEL_OUT }}/arch/arm64/boot/Image" artefacts/
-          # DTB / DTBO (optional)
-          DTB="${{ env.KERNEL_OUT }}/arch/arm64/boot/dts/exynos/s5e8535.dtb"
-          DTBO="${{ env.KERNEL_OUT }}/arch/arm64/boot/dtbo.img"
-          [ -f "$DTB"  ] && cp "$DTB"  artefacts/
-          [ -f "$DTBO" ] && cp "$DTBO" artefacts/
-          # Build log
-          cp "${{ env.KERNEL_OUT }}/build.log" artefacts/
-          # AnyKernel3 zip
-          [ -f "${{ env.ZIP_NAME }}" ] && cp "${{ env.ZIP_NAME }}" artefacts/
+          # Copy System.map and config
+          cp System.map ../output/ 2>/dev/null || true
+          cp .config ../output/kernel.config 2>/dev/null || true
 
-          echo "--- Artefacts ---"
-          ls -lh artefacts/
+          echo "===== Output files ====="
+          ls -lh ../output/
+          echo "======================="
 
-      # ────────────────────────────────────────────────────────
-      # 13. Upload artefacts to GitHub Actions
-      # ────────────────────────────────────────────────────────
-      - name: ⬆️ Upload build artefacts
+      # ─────────────────────────────────────────────
+      # 7. Upload artifacts
+      # ─────────────────────────────────────────────
+      - name: 📤 Upload Kernel Image
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: "SM-M146B-Kernel-${{ github.run_number }}"
-          path: artefacts/
+          name: kernel-SM-M146B-Android15-${{ github.run_number }}
+          path: output/
           retention-days: 30
 
-      # ────────────────────────────────────────────────────────
-      # 14. Create a GitHub Release (on main-branch push only)
-      # ────────────────────────────────────────────────────────
-      - name: 🚀 Create GitHub Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
+      - name: 📤 Upload Build Log
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: "kernel-${{ github.run_number }}"
-          name: "Custom Kernel – ${{ env.DEVICE_MODEL }} – Build #${{ github.run_number }}"
-          body: |
-            ## 🔨 Automated kernel build
+          name: build-log-${{ github.run_number }}
+          path: build.log
+          retention-days: 7
 
-            | Property | Value |
-            |---|---|
-            | **Device** | ${{ env.DEVICE_MODEL }} (${{ env.DEVICE_CODENAME }}) |
-            | **SoC** | ${{ env.TARGET_SOC }} |
-            | **Defconfig** | ${{ env.DEFCONFIG }} |
-            | **Source branch** | ${{ env.KERNEL_BRANCH }} |
-            | **Toolchain** | Neutron-Clang (latest) |
-            | **Build #** | ${{ github.run_number }} |
-            | **Commit** | ${{ github.sha }} |
-
-            > Flash with TWRP / any custom recovery that supports AnyKernel3.
-          files: artefacts/*
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # ─────────────────────────────────────────────
+      # 8. Print ccache stats
+      # ─────────────────────────────────────────────
+      - name: 📊 ccache Stats
+        if: always()
+        run: ccache --show-stats
