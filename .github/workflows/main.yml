@@ -1,4 +1,4 @@
-name: 🏗️ Build Kernel (KSU-Next + SUSFS)
+name: 🏗️ Build Kernel (ReSukiSU+ SUSFS)
 
 on:
   push:
