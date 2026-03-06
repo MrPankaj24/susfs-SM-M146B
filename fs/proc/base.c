@@ -97,6 +97,9 @@
 #include <linux/time_namespace.h>
 #include <linux/resctrl.h>
 #include <linux/cpufreq_times.h>
+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
+#include <linux/susfs_def.h>
+#endif
 #include <linux/cn_proc.h>
 #include <linux/task_integrity.h>
 #include <linux/proca.h>
