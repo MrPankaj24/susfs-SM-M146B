@@ -16,9 +16,9 @@ jobs:
     env:
       SUSFS_BRANCH: "gki-android13-5.15"
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
-      # Point directly to your raw custom patch and fragment files
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
-      CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
+      # Point to your new custom.config file
+      CUSTOM_CONFIG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/custom.config"
 
     steps:
       - name: 📥 Checkout Kernel Source
@@ -83,11 +83,14 @@ jobs:
           git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
           echo ">>> Cloned /tmp/susfs4ksu"
 
-      - name: ⬇️ Download Custom SUSFS Patch & Fragment
+      - name: ⬇️ Download Custom SUSFS Patch & Config
         run: |
-          echo ">>> Downloading custom patch and defconfig.fragment from MrPankaj24/susfs-SM-M146B..."
+          echo ">>> Downloading custom patch..."
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
-          curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
+          
+          echo ">>> Downloading custom.config directly into arch/arm64/configs/..."
+          # It MUST be in this directory for the 'make' command to find it as a target
+          curl -LSs "${CUSTOM_CONFIG_URL}" -o arch/arm64/configs/custom.config
 
       - name: 📁 Copy missing files from SUSFS
         run: |
@@ -135,22 +138,16 @@ jobs:
           export DTC_FLAGS="-@"
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
-          export LLVM=1
-          export DEPMOD=depmod
-          export ARCH=arm64
-          export TARGET_SOC=s5e8535
 
-          echo ">>> 1. Generating Base Config..."
-          make s5e8535-m14xnsxx_defconfig
+          echo ">>> Generating Base Config + Custom Config..."
+          # Merging the two configs natively!
+          make ARCH=arm64 LLVM=1 s5e8535-m14xnsxx_defconfig custom.config
 
-          echo ">>> 2. Applying defconfig.fragment..."
-          # Append the fragment settings to the base .config
-          cat /tmp/defconfig.fragment >> .config
-          # Validate and clean up the merged config
-          make olddefconfig
-
-          echo ">>> 3. Compiling (Using $(nproc) threads)..."
-          make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
+          echo ">>> Compiling (Using $(nproc) threads)..."
+          make -j$(nproc) \
+            ARCH=arm64 \
+            LLVM=1 \
+            2>&1 | tee /tmp/kernel_build.log
 
       - name: 📦 Collect Artifacts
         if: success()
@@ -167,7 +164,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-s5e8535-ksu-susfs
+          name: kernel-s5e8535-resukisu-susfs
           path: out/
           retention-days: 30
 
