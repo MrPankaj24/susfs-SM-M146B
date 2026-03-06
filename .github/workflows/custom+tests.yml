@@ -88,6 +88,40 @@ jobs:
         run: |
           echo ">>> Injecting ReSukiSU..."
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          
+      - name: 📁 Copy missing files from SUSFS
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          
+          echo ">>> Parsing custom patch for target files..."
+          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
+            | sed 's#^a/##; s#^b/##; s# b/##g' \
+            | tr ' ' '\n' \
+            | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
+
+          echo ">>> Copying target files that are missing in kernel tree from SUSFS repo..."
+          while read -r f; do
+            [ -z "$f" ] && continue
+            candidate="/tmp/susfs4ksu/${f}"
+            if [ ! -e "$f" ]; then
+              if [ -e "$candidate" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "$candidate" . || cp "$candidate" "$f"
+              elif [ -e "/tmp/susfs4ksu/kernel_patches/$f" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "/tmp/susfs4ksu/kernel_patches/$f" . || cp "/tmp/susfs4ksu/kernel_patches/$f" "$f"
+              fi
+            fi
+          done < /tmp/patch_targets.txt || true
+
+      - name: 🥷 Apply clean SUSFS patch
+        run: |
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          echo ">>> Applying clean local patch: $PATCH_FILE"
+          patch -p1 < "$PATCH_FILE"
 
       - name: 🛡️ Manually Inject SUSFS into ReSukiSU Kconfig & Makefile
         run: |
@@ -135,40 +169,6 @@ jobs:
           config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
               bool
           EOF
-
-      - name: 📁 Copy missing files from SUSFS
-        run: |
-          #!/usr/bin/env bash
-          set -euo pipefail
-          
-          PATCH_FILE="/tmp/custom_susfs.patch"
-          
-          echo ">>> Parsing custom patch for target files..."
-          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
-            | sed 's#^a/##; s#^b/##; s# b/##g' \
-            | tr ' ' '\n' \
-            | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
-
-          echo ">>> Copying target files that are missing in kernel tree from SUSFS repo..."
-          while read -r f; do
-            [ -z "$f" ] && continue
-            candidate="/tmp/susfs4ksu/${f}"
-            if [ ! -e "$f" ]; then
-              if [ -e "$candidate" ]; then
-                mkdir -p "$(dirname "$f")"
-                cp --parents "$candidate" . || cp "$candidate" "$f"
-              elif [ -e "/tmp/susfs4ksu/kernel_patches/$f" ]; then
-                mkdir -p "$(dirname "$f")"
-                cp --parents "/tmp/susfs4ksu/kernel_patches/$f" . || cp "/tmp/susfs4ksu/kernel_patches/$f" "$f"
-              fi
-            fi
-          done < /tmp/patch_targets.txt || true
-
-      - name: 🥷 Apply clean SUSFS patch
-        run: |
-          PATCH_FILE="/tmp/custom_susfs.patch"
-          echo ">>> Applying clean local patch: $PATCH_FILE"
-          patch -p1 < "$PATCH_FILE"
 
       - name: 🔨 Compile Kernel
         run: |
