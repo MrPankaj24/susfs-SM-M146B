@@ -84,29 +84,41 @@ jobs:
           echo ">>> Injecting KernelSU-Next..."
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s stable
 
-      - name: 🥷 Apply SUSFS & Samsung Rejection Patches
+      - name: 🥷 Apply only SUSFS core patch
         run: |
+          set -e
           echo ">>> Cloning SUSFS ($SUSFS_BRANCH)..."
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b $SUSFS_BRANCH /tmp/susfs4ksu
-          
-          echo ">>> Copying SUSFS files to fs/ and include/linux/..."
-          cp -rv /tmp/susfs4ksu/kernel_patches/fs/* fs/
-          cp -rv /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
-          
-          echo ">>> Applying standard SUSFS core patch..."
-          patch -p1 < /tmp/susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch || true
+          git clone --depth=1 -b $SUSFS_BRANCH https://gitlab.com/simonpunk/susfs4ksu.git /tmp/susfs4ksu
 
-          echo ">>> Downloading WildKernels Samsung Fixes..."
-          git clone https://github.com/WildKernels/kernel_patches.git /tmp/kernel_patches
-          
-          echo ">>> Applying Exynos Compatibility Patches (A54 -> M14)..."
-          # We pull the A546B patches because the Exynos 1380 layout is extremely similar to your 1330
-          cp /tmp/kernel_patches/samsung/SM-A546B-Oneui7/* ./
-          
-          # Force apply the rejection fixes to connect the SUSFS hooks!
-          patch -p1 < fix_namespace.patch || true
-          patch -p1 < fix_base.patch || true
-          patch -p1 < fix_exec.patch || true
+          PATCH_FILE="/tmp/susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_BRANCH}.patch"
+          if [ -f "$PATCH_FILE" ]; then
+            echo ">>> Verifying patch can be applied (dry-run, -p1)..."
+            if patch --dry-run -p1 < "$PATCH_FILE" 2>/tmp/patch_dryrun.log; then
+              echo ">>> Dry-run succeeded (p1). Applying patch with -p1..."
+              patch -p1 < "$PATCH_FILE"
+              echo ">>> Applied $PATCH_FILE with -p1"
+            else
+              echo ">>> Dry-run with -p1 failed. Attempting dry-run with -p0..."
+              tail -n +1 /tmp/patch_dryrun.log || true
+              if patch --dry-run -p0 < "$PATCH_FILE" 2>/tmp/patch_dryrun_p0.log; then
+                echo ">>> Dry-run succeeded (p0). Applying patch with -p0..."
+                patch -p0 < "$PATCH_FILE"
+                echo ">>> Applied $PATCH_FILE with -p0"
+              else
+                echo ">>> Could not apply patch with -p1 or -p0. Showing dry-run logs:"
+                echo "---- p1 dry-run log ----"
+                tail -n 200 /tmp/patch_dryrun.log || true
+                echo "---- p0 dry-run log ----"
+                tail -n 200 /tmp/patch_dryrun_p0.log || true
+                echo ">>> Exiting with failure so you can inspect the logs."
+                exit 1
+              fi
+            fi
+          else
+            echo ">>> Patch not found: $PATCH_FILE"
+            exit 1
+          fi
+
       # ──────────────────────────────────────────────
       # 5. Build The Kernel
       # ──────────────────────────────────────────────
@@ -136,9 +148,6 @@ jobs:
           # Core Root Features
           scripts/config --enable CONFIG_KSU
           scripts/config --enable CONFIG_KSU_SUSFS
-
-          # --- Enable Stealth Inline Hooking ---
-          scripts/config --enable CONFIG_KSU_INLINE_HOOK
           
           # Mountify Requirements
           scripts/config --enable CONFIG_TMPFS_XATTR
@@ -155,7 +164,7 @@ jobs:
           echo ">>> 3. Compiling (Using $(nproc) threads)..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
-      # ──────────────────────────────────────────────
+      # ────────────────────────────────────��─────────
       # 6. Collect & Upload
       # ──────────────────────────────────────────────
       - name: 📦 Collect Artifacts
