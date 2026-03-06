@@ -125,15 +125,15 @@ jobs:
 
       - name: 🛡️ Manually Inject SUSFS into ReSukiSU Kconfig & Makefile
         run: |
-          echo ">>> Copying SUSFS files into ReSukiSU..."
-          cp /tmp/susfs4ksu/kernel_patches/KernelSU/susfs.c drivers/kernelsu/
-          cp /tmp/susfs4ksu/kernel_patches/KernelSU/susfs.h drivers/kernelsu/
+          echo ">>> Copying SUSFS files into the correct kernel directories..."
+          # Copy the core C file to fs/ and the headers to include/linux/
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
           
           echo ">>> Updating drivers/kernelsu/Makefile..."
           echo "" >> drivers/kernelsu/Makefile
           echo "ifeq (\$(CONFIG_KSU_SUSFS),y)" >> drivers/kernelsu/Makefile
           echo "ccflags-y += -DCONFIG_KSU_SUSFS" >> drivers/kernelsu/Makefile
-          echo "kernelsu-objs += susfs.o" >> drivers/kernelsu/Makefile
           echo "endif" >> drivers/kernelsu/Makefile
           
           echo ">>> Updating drivers/kernelsu/Kconfig..."
