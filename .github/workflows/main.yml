@@ -70,11 +70,6 @@ jobs:
         run: |
           git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
 
-      - name: 🛡️ Patch ReSukiSU
-        run: |
-          echo ">>> Injecting ReSukiSU..."
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-          
       - name: 🥷 Clone SUSFS Repo (For missing files only)
         run: |
           set -e
@@ -122,6 +117,11 @@ jobs:
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
+
+      - name: 🛡️ Patch ReSukiSU
+        run: |
+          echo ">>> Injecting ReSukiSU..."
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
       - name: 🔨 Compile Kernel
         run: |
