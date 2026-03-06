@@ -16,8 +16,9 @@ jobs:
     env:
       SUSFS_BRANCH: "gki-android13-5.15"
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
-      # Point directly to your raw custom patch file!
+      # Point directly to your raw custom patch and fragment files
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
+      CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
 
     steps:
       - name: 📥 Checkout Kernel Source
@@ -82,10 +83,11 @@ jobs:
           git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
           echo ">>> Cloned /tmp/susfs4ksu"
 
-      - name: ⬇️ Download Custom SUSFS Patch
+      - name: ⬇️ Download Custom SUSFS Patch & Fragment
         run: |
-          echo ">>> Downloading custom patch from MrPankaj24/susfs-SM-M146B..."
+          echo ">>> Downloading custom patch and defconfig.fragment from MrPankaj24/susfs-SM-M146B..."
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
+          curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
 
       - name: 📁 Copy missing files from SUSFS
         run: |
@@ -141,15 +143,10 @@ jobs:
           echo ">>> 1. Generating Base Config..."
           make s5e8535-m14xnsxx_defconfig
 
-          echo ">>> 2. Enabling KSU, SUSFS, and Mountify..."
-          scripts/config --enable CONFIG_KSU
-          scripts/config --enable CONFIG_KSU_SUSFS
-          scripts/config --enable CONFIG_KSU_INLINE_HOOK
-          scripts/config --enable CONFIG_TMPFS_XATTR
-          scripts/config --enable CONFIG_TMPFS_POSIX_ACL
-          scripts/config --enable CONFIG_KPROBES
-          scripts/config --enable CONFIG_HAVE_KPROBES
-          scripts/config --enable CONFIG_KPROBE_EVENTS
+          echo ">>> 2. Applying defconfig.fragment..."
+          # Append the fragment settings to the base .config
+          cat /tmp/defconfig.fragment >> .config
+          # Validate and clean up the merged config
           make olddefconfig
 
           echo ">>> 3. Compiling (Using $(nproc) threads)..."
