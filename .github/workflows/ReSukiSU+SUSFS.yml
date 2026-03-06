@@ -18,7 +18,7 @@ jobs:
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
       # Point to your new custom.config file
-      CUSTOM_CONFIG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/custom.config"
+      CUSTOM_CONFIG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/refs/heads/main/arch/arm64/configs/defconfig.fragment"
 
     steps:
       - name: 📥 Checkout Kernel Source
