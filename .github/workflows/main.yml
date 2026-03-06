@@ -70,11 +70,11 @@ jobs:
         run: |
           git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
 
-      - name: 🛡️ Patch KernelSU-Next
+      - name: 🛡️ Patch ReSukiSU
         run: |
-          echo ">>> Injecting KernelSU-Next..."
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s stable
-
+          echo ">>> Injecting ReSukiSU..."
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          
       - name: 🥷 Clone SUSFS Repo (For missing files only)
         run: |
           set -e
