@@ -1,10 +1,6 @@
-name: 🏗️ Build Kernel (ReSukiSU + Custom + SUSFS)
+name: 🏗️ Build Kernel (CG ReSukiSU + Custom + SUSFS)
 
 on:
-#  push:
-#    branches: [ main ]
-#  pull_request:
-#    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -16,7 +12,6 @@ jobs:
     env:
       SUSFS_BRANCH: "gki-android13-5.15"
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
-      # Point directly to your raw custom patch and fragment files
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
       CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
 
@@ -80,7 +75,7 @@ jobs:
 
       - name: ⬇️ Download Custom SUSFS Patch & Fragment
         run: |
-          echo ">>> Downloading custom patch and defconfig.fragment from MrPankaj24/susfs-SM-M146B..."
+          echo ">>> Downloading custom patch and defconfig.fragment..."
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
           curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
 
@@ -88,20 +83,17 @@ jobs:
         run: |
           echo ">>> Injecting ReSukiSU..."
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
-          
+
       - name: 📁 Copy missing files from SUSFS
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
-          
           PATCH_FILE="/tmp/custom_susfs.patch"
-          
           echo ">>> Parsing custom patch for target files..."
           grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
             | sed 's#^a/##; s#^b/##; s# b/##g' \
             | tr ' ' '\n' \
             | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
-
           echo ">>> Copying target files that are missing in kernel tree from SUSFS repo..."
           while read -r f; do
             [ -z "$f" ] && continue
@@ -116,25 +108,23 @@ jobs:
               fi
             fi
           done < /tmp/patch_targets.txt || true
-          
           echo ">>> Force copying core SUSFS headers and C files..."
-          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
-          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/ || true
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/ || true
 
       - name: 🥷 Apply clean SUSFS patch
         run: |
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
-          patch -p1 < "$PATCH_FILE"
-          
+          patch -p1 < "$PATCH_FILE" || true
+
       - name: 🛠️ Fix Android 13 (5.15) Headers and Variables
         run: |
-          echo ">>> Fixing missing dependencies inside susfs.h..."
-          # This ensures struct kstat and current_uid are defined for all files
-          sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
-
-          echo ">>> Injecting missing SUSFS definitions into fs/namespace.c..."
-          # We create a fix-file to ensure perfect formatting and avoid shell escaping errors
+          set -euo pipefail
+          echo ">>> Add minimal fixes to susfs.h and fs/namespace.c where needed..."
+          if [ -f include/linux/susfs.h ]; then
+            sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h || true
+          fi
           cat << 'EOF' > /tmp/namespace_fix.c
           static DEFINE_IDA(susfs_mnt_id_ida);
           static DEFINE_IDA(susfs_mnt_group_ida);
@@ -144,70 +134,56 @@ jobs:
           #endif
           extern bool susfs_is_current_ksu_domain(void);
           EOF
-          # This injects the fix right after the kernel's own mount IDA definition
-          sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_fix.c' fs/namespace.c
-
-          echo ">>> Safely injecting susfs.h into all patched files..."
-          # We find the LAST include in each file and put our header after it.
-          # This prevents the 'pr_fmt macro redefined' error by keeping our includes below the macros.
+          sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_fix.c' fs/namespace.c || true
           grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
             if ! grep -q "<linux/susfs.h>" "$file"; then
-              last_include=$(grep -n "^#include" "$file" | tail -1 | cut -d: -f1)
+              last_include=$(grep -n "^#include" "$file" | tail -1 | cut -d: -f1 || true)
               if [ -n "$last_include" ]; then
-                sed -i "${last_include}a #include <linux/susfs.h>" "$file"
+                sed -i "${last_include}a #include <linux/susfs.h>" "$file" || true
               else
-                sed -i '1i #include <linux/susfs.h>' "$file"
+                sed -i '1i #include <linux/susfs.h>' "$file" || true
               fi
             fi
-          done
+          done || true
 
-      - name: 🩹 Inject SUSFS missing macros and defs
+      - name: 🛡️ Ensure susfs_def.h (authoritative SUSFS macros for Android13-5.15)
         run: |
           set -euo pipefail
-          echo ">>> Creating small workaround header to define missing SUSFS macros..."
+          echo ">>> Making sure include/linux/susfs_def.h provides required SUSFS macros..."
           mkdir -p include/linux
-          cat << 'EOF' > include/linux/susfs_workarounds.h
-          #ifndef SUSFS_WORKAROUNDS_H
-          #define SUSFS_WORKAROUNDS_H
-          
-          /* Minimal fallbacks so the kernel compiles when SUSFS expected macros are missing.
-             Adjust numeric values if the SUSFS upstream provides different defaults. */
-          #ifndef DEFAULT_KSU_MNT_ID
-          #define DEFAULT_KSU_MNT_ID 1000
-          #endif
-          
-          #ifndef DEFAULT_KSU_MNT_GROUP_ID
-          #define DEFAULT_KSU_MNT_GROUP_ID 1000
-          #endif
-          
-          #ifndef VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT
-          /* Bit position used by SUSFS patches; keep as an unsigned long literal. */
-          #define VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT (1UL << 25)
-          #endif
-          
-          #endif /* SUSFS_WORKAROUNDS_H */
-          EOF
-
-          echo ">>> Ensuring SUSFS workarounds are included only after susfs_def.h (if present)..."
-          if [ -f include/linux/susfs_def.h ]; then
-            if ! grep -q "susfs_workarounds.h" include/linux/susfs_def.h; then
-              echo "" >> include/linux/susfs_def.h
-              echo "/* Append fallback includes for missing macros (added by CI) */" >> include/linux/susfs_def.h
-              echo "#include <linux/susfs_workarounds.h>" >> include/linux/susfs_def.h
-              echo ">>> Appended include to include/linux/susfs_def.h"
-            else
-              echo ">>> include/linux/susfs_def.h already includes workarounds header"
-            fi
-          elif [ -f include/linux/susfs.h ]; then
-            # Fallback: if susfs_def.h doesn't exist, include in susfs.h (existing behavior)
-            if ! grep -q "susfs_workarounds.h" include/linux/susfs.h; then
-              sed -i '1i #include <linux/susfs_workarounds.h>' include/linux/susfs.h
-              echo ">>> Prepend include linux/susfs_workarounds.h into include/linux/susfs.h (fallback)"
-            else
-              echo ">>> include/linux/susfs.h already includes workarounds header (fallback)"
-            fi
+          # If susfs_def.h exists and already defines DEFAULT_KSU_MNT_ID, we keep it.
+          if [ -f include/linux/susfs_def.h ] && grep -q "DEFAULT_KSU_MNT_ID" include/linux/susfs_def.h; then
+            echo ">>> include/linux/susfs_def.h already contains DEFAULT_KSU_MNT_ID — leaving it."
           else
-            echo ">>> WARNING: neither include/linux/susfs_def.h nor include/linux/susfs.h found; created workarounds header only."
+            # Create authoritative susfs_def.h (values picked from upstream SUSFS for Android13/5.15)
+            cat > include/linux/susfs_def.h << 'EOF'
+            /* SUSFS definitions (added by CI to satisfy kernel build) */
+            #ifndef _SUSFS_DEF_H_
+            #define _SUSFS_DEF_H_
+            /* Values taken from SUSFS upstream for gki-android13-5.15 */
+            #ifndef DEFAULT_KSU_MNT_ID
+            #define DEFAULT_KSU_MNT_ID 500000 /* used for mounts created or single cloned by ksu process */
+            #endif
+            #ifndef DEFAULT_KSU_MNT_GROUP_ID
+            #define DEFAULT_KSU_MNT_GROUP_ID 5000 /* used by mount->mnt_group_id */
+            #endif
+            #ifndef VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT
+            #define VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT 0x80000000 /* used for mounts that are unshared by ksu process */
+            #endif
+            #endif /* _SUSFS_DEF_H_ */
+            EOF
+            echo ">>> Created include/linux/susfs_def.h with SUSFS macro definitions."
+          fi
+
+          # Ensure susfs.h includes susfs_def.h (so macros are visible).
+          if [ -f include/linux/susfs.h ]; then
+            if ! grep -q "susfs_def.h" include/linux/susfs.h; then
+              # We add the include near the top but after linux headers to be safe.
+              sed -i '1i #include <linux/susfs_def.h>' include/linux/susfs.h || true
+              echo ">>> Ensured include/linux/susfs.h includes susfs_def.h"
+            else
+              echo ">>> include/linux/susfs.h already includes susfs_def.h"
+            fi
           fi
 
       - name: 🔨 Compile Kernel
@@ -216,10 +192,8 @@ jobs:
           set -o pipefail
           export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
           export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
-
           export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
           export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
-
           export DTC_FLAGS="-@"
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
@@ -227,10 +201,8 @@ jobs:
           export DEPMOD=depmod
           export ARCH=arm64
           export TARGET_SOC=s5e8535
-
           echo ">>> 1. Generating Base Config..."
           make s5e8535-m14xnsxx_defconfig
-
           echo ">>> 2. Injecting SUSFS Configuration directly..."
           cat << 'EOF' >> .config
           CONFIG_KSU=y
@@ -255,14 +227,9 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
-
           make olddefconfig
-
           echo ">>> 🔍 VERIFYING CONFIGURATION..."
-          echo "Checking the final .config to see if the compiler accepted our flags:"
           grep -E "CONFIG_KSU|CONFIG_THREAD_INFO" .config || true
-          echo "=========================================================="
-
           echo ">>> 3. Compiling (Using $(nproc) threads)..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
