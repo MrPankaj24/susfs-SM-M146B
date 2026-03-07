@@ -129,16 +129,15 @@ jobs:
 
       - name: 🛠️ Hardcode Missing SUSFS Includes & Flags
         run: |
-          echo ">>> Force-injecting susfs.h into all patched files..."
-          # This finds every .c file in fs/ and kernel/ that uses susfs and injects the header at line 1
-          find fs/ kernel/ -type f -name "*.c" | xargs grep -l 'susfs_' | xargs sed -i '1s/^/#include <linux\/susfs.h>\n/'
+          echo ">>> Injecting susfs.h globally via fs.h and proc/internal.h..."
+          echo "#include <linux/susfs.h>" >> include/linux/fs.h
+          echo "#include <linux/susfs.h>" >> fs/proc/internal.h
           
-          echo ">>> Hardcoding AS_FLAGS into pagemap.h to prevent undeclared errors..."
-          # Bypassing the enum and defining them directly at the bottom of the file
-          echo "" >> include/linux/pagemap.h
-          echo "#define AS_FLAGS_SUS_MAP 25" >> include/linux/pagemap.h
-          echo "#define AS_FLAGS_SUS_KSTAT 26" >> include/linux/pagemap.h
-          echo "#define AS_FLAGS_OPEN_REDIRECT 27" >> include/linux/pagemap.h
+          echo ">>> Safely injecting AS_FLAGS into pagemap.h enum..."
+          # This injects the flags directly into the enum list BEFORE the closing tag
+          sed -i '/NR_MAPPING_FLAGS/i \        AS_FLAGS_SUS_MAP,' include/linux/pagemap.h
+          sed -i '/NR_MAPPING_FLAGS/i \        AS_FLAGS_SUS_KSTAT,' include/linux/pagemap.h
+          sed -i '/NR_MAPPING_FLAGS/i \        AS_FLAGS_OPEN_REDIRECT,' include/linux/pagemap.h
           
       - name: 🔨 Compile Kernel
         run: |
