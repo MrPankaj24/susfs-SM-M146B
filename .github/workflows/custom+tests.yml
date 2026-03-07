@@ -130,31 +130,28 @@ jobs:
       - name: 🛠️ Fix Android 13 (5.15) Headers and Variables
         run: |
           echo ">>> Fixing missing dependencies inside susfs.h..."
+          # This ensures struct kstat and current_uid are defined for all files
           sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
 
-          echo ">>> Injecting all missing SUSFS & KSU definitions into fs/namespace.c..."
+          echo ">>> Injecting missing SUSFS variables into fs/namespace.c..."
+          # We only define the variables that are NOT in the header files
           cat << 'EOF' > /tmp/namespace_fix.c
           static DEFINE_IDA(susfs_mnt_id_ida);
           static DEFINE_IDA(susfs_mnt_group_ida);
           bool susfs_is_sdcard_android_data_decrypted = false;
-          #ifndef CL_COPY_MNT_NS
-          #define CL_COPY_MNT_NS BIT(25)
-          #endif
-          #ifndef DEFAULT_KSU_MNT_ID
-          #define DEFAULT_KSU_MNT_ID 1000000
-          #endif
-          #ifndef DEFAULT_KSU_MNT_GROUP_ID
-          #define DEFAULT_KSU_MNT_GROUP_ID 1000000
-          #endif
-          #ifndef VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT
-          #define VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT 0x01000000
-          #endif
           extern bool susfs_is_current_ksu_domain(void);
           EOF
+          # Inject variables after the standard mount group IDA
           sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_fix.c' fs/namespace.c
 
-          echo ">>> Safely injecting susfs.h into all patched files..."
+          echo ">>> Forcing early include of susfs.h in namespace.c..."
+          # This provides the correct 5.15 macros (CL_COPY_MNT_NS, etc.) early in the file
+          sed -i '1i #include <linux/susfs.h>' fs/namespace.c
+
+          echo ">>> Safely injecting susfs.h into all other patched files..."
+          # This loop fixes all other files (exec.c, etc.) without causing pr_fmt errors
           grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
+            if [ "$file" == "fs/namespace.c" ]; then continue; fi
             if ! grep -q "<linux/susfs.h>" "$file"; then
               last_include=$(grep -n "^#include" "$file" | tail -1 | cut -d: -f1)
               if [ -n "$last_include" ]; then
