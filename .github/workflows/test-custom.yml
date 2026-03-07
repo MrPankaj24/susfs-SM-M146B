@@ -1,4 +1,4 @@
-name: 🏗️ Build Kernel (ReSukiSU + Custom + SUSFS)
+name: 🏗️ Build Kernel (Test ReSukiSU + Custom + SUSFS)
 
 on:
 #  push:
