@@ -149,28 +149,24 @@ jobs:
 
           echo ">>> Step 3: Inject SUSFS declarations into fs/namespace.c..."
 
-          # ✅ Check for the DEFINITION, not just any mention of the symbol
           if ! grep -q 'DEFINE_IDA(susfs_mnt_id_ida)' fs/namespace.c; then
 
-            # Create clean declaration block (no YAML indent issues)
-            cat > /tmp/susfs_ns_decl.c << 'DECLEOF'
-            
-            /* SUSFS namespace declarations */
-            static DEFINE_IDA(susfs_mnt_id_ida);
-            static DEFINE_IDA(susfs_mnt_group_ida);
-            extern bool susfs_is_sdcard_android_data_decrypted;
-            extern bool susfs_is_current_ksu_domain(void);
-            #ifndef CL_COPY_MNT_NS
-            #define CL_COPY_MNT_NS (1 << 25)
-            #endif
-            DECLEOF
+            printf '%s\n' \
+              '' \
+              '/* SUSFS namespace declarations */' \
+              'static DEFINE_IDA(susfs_mnt_id_ida);' \
+              'static DEFINE_IDA(susfs_mnt_group_ida);' \
+              'extern bool susfs_is_sdcard_android_data_decrypted;' \
+              'extern bool susfs_is_current_ksu_domain(void);' \
+              '#ifndef CL_COPY_MNT_NS' \
+              '#define CL_COPY_MNT_NS (1 << 25)' \
+              '#endif' \
+              > /tmp/susfs_ns_decl.c
 
-            # Try primary injection point: after mnt_group_ida
             if grep -q 'static DEFINE_IDA(mnt_group_ida)' fs/namespace.c; then
               echo ">>> Found mnt_group_ida — injecting after it..."
               sed -i '/static DEFINE_IDA(mnt_group_ida)/r /tmp/susfs_ns_decl.c' fs/namespace.c
             else
-              # Fallback: inject after the last #include
               echo ">>> mnt_group_ida not found — injecting after last #include..."
               LAST_INC=$(grep -n '^#include' fs/namespace.c | tail -1 | cut -d: -f1)
               if [ -n "$LAST_INC" ]; then
