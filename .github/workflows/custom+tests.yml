@@ -1,4 +1,4 @@
-name: 🏗️ Build Kernel (ReSukiSU + SUSFS)
+name: 🏗️ Build Kernel (ReSukiSU + Custom + SUSFS)
 
 on:
   push:
@@ -126,6 +126,14 @@ jobs:
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
+
+      - name: 🛠️ Auto-Fix Missing SUSFS Includes & Pagemap Flags
+        run: |
+          echo ">>> Auto-injecting susfs.h into all files that include susfs_def.h..."
+          find fs/ -type f -name "*.c" -exec sed -i 's/#include <linux\/susfs_def.h>/#include <linux\/susfs_def.h>\n#include <linux\/susfs.h>/g' {} +
+          
+          echo ">>> Registering AS_FLAGS_SUS_MAP in pagemap.h..."
+          sed -i 's/NR_MAPPING_FLAGS/#ifdef CONFIG_KSU_SUSFS\n\tAS_FLAGS_SUS_MAP,\n\tAS_FLAGS_SUS_KSTAT,\n#endif\n\tNR_MAPPING_FLAGS/g' include/linux/pagemap.h
           
       - name: 🔨 Compile Kernel
         run: |
