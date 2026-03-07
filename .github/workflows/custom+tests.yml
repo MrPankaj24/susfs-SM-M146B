@@ -116,6 +116,10 @@ jobs:
               fi
             fi
           done < /tmp/patch_targets.txt || true
+          
+          echo ">>> Force copying core SUSFS headers and C files..."
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
       - name: 🥷 Apply clean SUSFS patch
         run: |
