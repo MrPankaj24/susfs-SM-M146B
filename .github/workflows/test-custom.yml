@@ -1,4 +1,4 @@
-name: 🏗️ Build Kernel (Test ReSukiSU + Custom + SUSFS)
+name: 🏗️ Build Kernel (ReSukiSU + Custom + SUSFS)
 
 on:
 #  push:
@@ -188,16 +188,26 @@ jobs:
           #endif /* SUSFS_WORKAROUNDS_H */
           EOF
 
-          # Ensure susfs.h includes our workaround header (prepend if missing)
-          if [ -f include/linux/susfs.h ]; then
+          echo ">>> Ensuring SUSFS workarounds are included only after susfs_def.h (if present)..."
+          if [ -f include/linux/susfs_def.h ]; then
+            if ! grep -q "susfs_workarounds.h" include/linux/susfs_def.h; then
+              echo "" >> include/linux/susfs_def.h
+              echo "/* Append fallback includes for missing macros (added by CI) */" >> include/linux/susfs_def.h
+              echo "#include <linux/susfs_workarounds.h>" >> include/linux/susfs_def.h
+              echo ">>> Appended include to include/linux/susfs_def.h"
+            else
+              echo ">>> include/linux/susfs_def.h already includes workarounds header"
+            fi
+          elif [ -f include/linux/susfs.h ]; then
+            # Fallback: if susfs_def.h doesn't exist, include in susfs.h (existing behavior)
             if ! grep -q "susfs_workarounds.h" include/linux/susfs.h; then
               sed -i '1i #include <linux/susfs_workarounds.h>' include/linux/susfs.h
-              echo ">>> Prepend include linux/susfs_workarounds.h into include/linux/susfs.h"
+              echo ">>> Prepend include linux/susfs_workarounds.h into include/linux/susfs.h (fallback)"
             else
-              echo ">>> include/linux/susfs.h already includes workarounds header"
+              echo ">>> include/linux/susfs.h already includes workarounds header (fallback)"
             fi
           else
-            echo ">>> WARNING: include/linux/susfs.h not found; created workarounds header only."
+            echo ">>> WARNING: neither include/linux/susfs_def.h nor include/linux/susfs.h found; created workarounds header only."
           fi
 
       - name: 🔨 Compile Kernel
