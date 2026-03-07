@@ -126,24 +126,39 @@ jobs:
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
-
-      - name: 🛠️ Fix Android 13 (5.15) Headers
+          
+      - name: 🛠️ Fix Android 13 (5.15) Headers and Variables
         run: |
           echo ">>> Fixing missing dependencies inside susfs.h..."
+          # This ensures struct kstat and current_uid are defined for all files
           sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
-          
-          echo ">>> Injecting all missing SUSFS definitions into fs/namespace.c..."
-          # This adds the IDAs, the decrypted bool, the missing CL_COPY_MNT_NS macro, and the function prototype
-          sed -i '/static DEFINE_IDA(mnt_group_ida);/a \
-          static DEFINE_IDA(susfs_mnt_id_ida);\
-          static DEFINE_IDA(susfs_mnt_group_ida);\
-          bool susfs_is_sdcard_android_data_decrypted = false;\
-          #define CL_COPY_MNT_NS BIT(25)\
-          extern bool susfs_is_current_ksu_domain(void);' fs/namespace.c
-          
+
+          echo ">>> Injecting missing SUSFS definitions into fs/namespace.c..."
+          # We create a fix-file to ensure perfect formatting and avoid shell escaping errors
+          cat << 'EOF' > /tmp/namespace_fix.c
+          static DEFINE_IDA(susfs_mnt_id_ida);
+          static DEFINE_IDA(susfs_mnt_group_ida);
+          bool susfs_is_sdcard_android_data_decrypted = false;
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS BIT(25)
+          #endif
+          extern bool susfs_is_current_ksu_domain(void);
+          EOF
+          # This injects the fix right after the kernel's own mount IDA definition
+          sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_fix.c' fs/namespace.c
+
           echo ">>> Safely injecting susfs.h into all patched files..."
+          # We find the LAST include in each file and put our header after it.
+          # This prevents the 'pr_fmt macro redefined' error by keeping our includes below the macros.
           grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
-            awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
+            if ! grep -q "<linux/susfs.h>" "$file"; then
+              last_include=$(grep -n "^#include" "$file" | tail -1 | cut -d: -f1)
+              if [ -n "$last_include" ]; then
+                sed -i "${last_include}a #include <linux/susfs.h>" "$file"
+              else
+                sed -i '1i #include <linux/susfs.h>' "$file"
+              fi
+            fi
           done
           
       - name: 🔨 Compile Kernel
