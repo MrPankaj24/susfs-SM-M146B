@@ -127,17 +127,16 @@ jobs:
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
 
-      - name: 🛠️ Fix Android 13 (5.15) Declarations
+      - name: 🛠️ Fix Android 13 (5.15) Headers
         run: |
-          echo ">>> Injecting susfs.h directly into the exact failing files..."
-          # 1s/^/ means "On line 1, substitute the start of the line with this text"
+          echo ">>> Fixing missing dependencies inside susfs.h..."
+          # This injects the credential and stat headers directly into susfs.h so it never fails
+          sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
+          
+          echo ">>> Injecting susfs.h into failing procfs files..."
           sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/proc/base.c
           sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/proc/task_mmu.c
-          
-          echo ">>> Injecting AS_FLAGS directly into the 5.15 pagemap enum..."
-          # This specifically targets the opening bracket of the 5.15 mapping_flags enum
-          sed -i 's/enum mapping_flags {/enum mapping_flags {\n\tAS_FLAGS_SUS_MAP = 25,\n\tAS_FLAGS_SUS_KSTAT = 26,\n\tAS_FLAGS_OPEN_REDIRECT = 27,/g' include/linux/pagemap.h
-          
+     
       - name: 🔨 Compile Kernel
         run: |
           set -e
