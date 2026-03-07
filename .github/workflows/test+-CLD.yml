@@ -1,0 +1,239 @@
+name: 🏗️ Build Kernel (CLD ReSukiSU + Custom + SUSFS)
+
+on:
+#  push:
+#    branches: [ main ]
+#  pull_request:
+#    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    name: 🏗️ Build s5e8535 / M14
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    env:
+      SUSFS_BRANCH: "gki-android13-5.15"
+      SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      # Point directly to your raw custom patch and fragment files
+      CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
+      CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
+
+    steps:
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: MrPankaj24/SM-M146B-Kernel-Source
+          ref: main
+          fetch-depth: 1
+
+      - name: 📦 Install Build Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            git curl wget bc bison flex libssl-dev libelf-dev python3 python-is-python3 \
+            make gcc gcc-aarch64-linux-gnu binutils binutils-aarch64-linux-gnu \
+            g++ cpio zip unzip lz4 zstd xz-utils libncurses-dev libncurses5-dev \
+            kmod rsync lld llvm clang dwarves pahole ccache device-tree-compiler \
+            zlib1g-dev libc6-dev-i386 cmake ninja-build
+
+      - name: 🔧 Cache Toolchains
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchain/clang/host/linux-x86/clang-r450784d
+            toolchain/build/kernel/build-tools
+            toolchain/prebuilts/kernel-build-tools
+          key: toolchain-clang-r450784d-v1
+
+      - name: ⬇️ Download Clang r450784d (AOSP)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
+          echo "Downloading Clang r450784d..."
+          curl -L "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz" -o /tmp/clang.tar.gz
+          tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
+          rm /tmp/clang.tar.gz
+
+      - name: ⬇️ Download Kernel Build Tools
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 -b main https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/build/kernel/build-tools
+          mkdir -p toolchain/build/kernel/build-tools/path
+          ln -sf $(pwd)/toolchain/build/kernel/build-tools/linux-x86 toolchain/build/kernel/build-tools/path/linux-x86
+          ln -sf $(pwd)/toolchain/build/kernel/build-tools/sysroots/x86_64-unknown-linux-musl toolchain/build/kernel/build-tools/sysroot
+
+      - name: ⬇️ Download Prebuilt Tools (for pahole)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
+
+      - name: 🥷 Clone SUSFS Repo (For missing files only)
+        run: |
+          set -e
+          echo ">>> Cloning SUSFS branch ${SUSFS_BRANCH}..."
+          rm -rf /tmp/susfs4ksu
+          git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
+          echo ">>> Cloned /tmp/susfs4ksu"
+
+      - name: ⬇️ Download Custom SUSFS Patch & Fragment
+        run: |
+          echo ">>> Downloading custom patch and defconfig.fragment from MrPankaj24/susfs-SM-M146B..."
+          curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
+          curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
+
+      - name: 🛡️ Inject ReSukiSU
+        run: |
+          echo ">>> Injecting ReSukiSU..."
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          
+      - name: 📁 Copy missing files from SUSFS
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          
+          echo ">>> Parsing custom patch for target files..."
+          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
+            | sed 's#^a/##; s#^b/##; s# b/##g' \
+            | tr ' ' '\n' \
+            | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
+
+          echo ">>> Copying target files that are missing in kernel tree from SUSFS repo..."
+          while read -r f; do
+            [ -z "$f" ] && continue
+            candidate="/tmp/susfs4ksu/${f}"
+            if [ ! -e "$f" ]; then
+              if [ -e "$candidate" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "$candidate" . || cp "$candidate" "$f"
+              elif [ -e "/tmp/susfs4ksu/kernel_patches/$f" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "/tmp/susfs4ksu/kernel_patches/$f" . || cp "/tmp/susfs4ksu/kernel_patches/$f" "$f"
+              fi
+            fi
+          done < /tmp/patch_targets.txt || true
+          
+          echo ">>> Force copying core SUSFS headers and C files..."
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
+
+      - name: 🥷 Apply clean SUSFS patch
+        run: |
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          echo ">>> Applying clean local patch: $PATCH_FILE"
+          patch -p1 < "$PATCH_FILE"
+          
+      - name: 🛠️ Final Android 13 (5.15) Sequence Fix
+        run: |
+          echo ">>> Fixing missing dependencies inside susfs.h..."
+          sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
+
+          echo ">>> Safely injecting susfs.h into all patched files..."
+          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
+            if ! grep -q "<linux/susfs.h>" "$file"; then
+              awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
+            fi
+          done
+
+          echo ">>> Injecting missing variables safely AFTER kernel headers..."
+          cat << 'EOF' > /tmp/namespace_vars.c
+          static DEFINE_IDA(susfs_mnt_id_ida);
+          static DEFINE_IDA(susfs_mnt_group_ida);
+          extern bool susfs_is_sdcard_android_data_decrypted;
+          extern bool susfs_is_current_ksu_domain(void);
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS (1 << 25)
+          #endif
+          EOF
+          
+          # Only inject if not already present
+          if ! grep -q 'susfs_mnt_id_ida' fs/namespace.c; then
+            sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_vars.c' fs/namespace.c
+          fi
+          
+      - name: 🔨 Compile Kernel
+        run: |
+          set -e
+          set -o pipefail
+          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
+          export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
+
+          export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
+          export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
+
+          export DTC_FLAGS="-@"
+          export PLATFORM_VERSION=15
+          export ANDROID_MAJOR_VERSION=v
+          export LLVM=1
+          export DEPMOD=depmod
+          export ARCH=arm64
+          export TARGET_SOC=s5e8535
+
+          echo ">>> 1. Generating Base Config..."
+          make s5e8535-m14xnsxx_defconfig
+
+          echo ">>> 2. Injecting SUSFS Configuration directly..."
+          cat << 'EOF' >> .config
+          CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_THREAD_INFO_IN_TASK=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_UNICODE_FILTER=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          EOF
+
+          make olddefconfig
+
+          echo ">>> 🔍 VERIFYING CONFIGURATION..."
+          echo "Checking the final .config to see if the compiler accepted our flags:"
+          grep -E "CONFIG_KSU|CONFIG_THREAD_INFO" .config || true
+          echo "=========================================================="
+
+          echo ">>> 3. Compiling (Using $(nproc) threads)..."
+          make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
+
+      - name: 📦 Collect Artifacts
+        if: success()
+        run: |
+          mkdir -p out/kernel
+          [ -f arch/arm64/boot/Image ] && cp arch/arm64/boot/Image out/kernel/
+          [ -f arch/arm64/boot/Image.gz ] && cp arch/arm64/boot/Image.gz out/kernel/
+          if [ -d arch/arm64/boot/dts/exynos ]; then
+            mkdir -p out/dtbs
+            find arch/arm64/boot/dts/exynos -name "*.dtb" | grep -i "s5e8535\|m14" | xargs -I{} cp {} out/dtbs/ 2>/dev/null || true
+          fi
+
+      - name: ⬆️ Upload Final Kernel
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-s5e8535-ksu-susfs
+          path: out/
+          retention-days: 30
+
+      - name: ⬆️ Upload Build Log (On Failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-failure
+          path: /tmp/kernel_build.log
+          retention-days: 7
