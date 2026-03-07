@@ -129,30 +129,71 @@ jobs:
           
       - name: 🛠️ Final Android 13 (5.15) Sequence Fix
         run: |
-          echo ">>> Fixing missing dependencies inside susfs.h..."
-          sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
+          set -e
 
-          echo ">>> Safely injecting susfs.h into all patched files..."
-          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
-            if ! grep -q "<linux/susfs.h>" "$file"; then
-              awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
+          echo ">>> Step 1: Fix susfs.h dependencies..."
+          if [ -f include/linux/susfs.h ]; then
+            grep -q '<linux/cred.h>' include/linux/susfs.h || \
+              sed -i '1i\#include <linux/cred.h>' include/linux/susfs.h
+            grep -q '<linux/stat.h>' include/linux/susfs.h || \
+              sed -i '1i\#include <linux/stat.h>' include/linux/susfs.h
+          fi
+
+          echo ">>> Step 2: Inject susfs.h into .c files that use susfs_ symbols..."
+          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ 2>/dev/null | grep '\.c$' | while read -r file; do
+            if ! grep -q '<linux/susfs.h>' "$file"; then
+              awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' \
+                "$file" > temp.c && mv temp.c "$file"
             fi
-          done
+          done || true
 
-          echo ">>> Injecting missing variables safely AFTER kernel headers..."
-          cat << 'EOF' > /tmp/namespace_vars.c
-          static DEFINE_IDA(susfs_mnt_id_ida);
-          static DEFINE_IDA(susfs_mnt_group_ida);
-          extern bool susfs_is_sdcard_android_data_decrypted;
-          extern bool susfs_is_current_ksu_domain(void);
-          #ifndef CL_COPY_MNT_NS
-          #define CL_COPY_MNT_NS (1 << 25)
-          #endif
-          EOF
-          
-          # Only inject if not already present
-          if ! grep -q 'susfs_mnt_id_ida' fs/namespace.c; then
-            sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_vars.c' fs/namespace.c
+          echo ">>> Step 3: Inject SUSFS declarations into fs/namespace.c..."
+
+          # ✅ Check for the DEFINITION, not just any mention of the symbol
+          if ! grep -q 'DEFINE_IDA(susfs_mnt_id_ida)' fs/namespace.c; then
+
+            # Create clean declaration block (no YAML indent issues)
+            cat > /tmp/susfs_ns_decl.c << 'DECLEOF'
+            
+            /* SUSFS namespace declarations */
+            static DEFINE_IDA(susfs_mnt_id_ida);
+            static DEFINE_IDA(susfs_mnt_group_ida);
+            extern bool susfs_is_sdcard_android_data_decrypted;
+            extern bool susfs_is_current_ksu_domain(void);
+            #ifndef CL_COPY_MNT_NS
+            #define CL_COPY_MNT_NS (1 << 25)
+            #endif
+            DECLEOF
+
+            # Try primary injection point: after mnt_group_ida
+            if grep -q 'static DEFINE_IDA(mnt_group_ida)' fs/namespace.c; then
+              echo ">>> Found mnt_group_ida — injecting after it..."
+              sed -i '/static DEFINE_IDA(mnt_group_ida)/r /tmp/susfs_ns_decl.c' fs/namespace.c
+            else
+              # Fallback: inject after the last #include
+              echo ">>> mnt_group_ida not found — injecting after last #include..."
+              LAST_INC=$(grep -n '^#include' fs/namespace.c | tail -1 | cut -d: -f1)
+              if [ -n "$LAST_INC" ]; then
+                sed -i "${LAST_INC}r /tmp/susfs_ns_decl.c" fs/namespace.c
+              else
+                echo "❌ ERROR: No #include found in namespace.c"
+                exit 1
+              fi
+            fi
+          else
+            echo ">>> SUSFS IDA declarations already present — skipping."
+          fi
+
+          echo ""
+          echo ">>> ✅ Verification:"
+          if grep -q 'DEFINE_IDA(susfs_mnt_id_ida)' fs/namespace.c && \
+             grep -q 'extern bool susfs_is_sdcard_android_data_decrypted' fs/namespace.c; then
+            echo "All SUSFS declarations found in namespace.c ✅"
+            grep -n 'DEFINE_IDA(susfs_\|extern bool susfs_\|CL_COPY_MNT_NS' fs/namespace.c
+          else
+            echo "❌ Injection FAILED — dumping first 120 lines:"
+            head -120 fs/namespace.c
+            exit 1
           fi
           
       - name: 🔨 Compile Kernel
