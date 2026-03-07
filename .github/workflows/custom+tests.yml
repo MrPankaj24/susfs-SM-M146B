@@ -127,29 +127,16 @@ jobs:
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
 
-      - name: 🛠️ The Ultimate SUSFS Injector
+      - name: 🛠️ Fix Android 13 (5.15) Declarations
         run: |
-          echo ">>> Creating custom SUSFS header for missing flags..."
-          cat << 'EOF' > include/linux/susfs_custom_flags.h
-          #ifndef _SUSFS_CUSTOM_FLAGS_H
-          #define _SUSFS_CUSTOM_FLAGS_H
-          #include <linux/susfs.h>
-          #ifndef AS_FLAGS_SUS_MAP
-          #define AS_FLAGS_SUS_MAP 25
-          #endif
-          #ifndef AS_FLAGS_SUS_KSTAT
-          #define AS_FLAGS_SUS_KSTAT 26
-          #endif
-          #ifndef AS_FLAGS_OPEN_REDIRECT
-          #define AS_FLAGS_OPEN_REDIRECT 27
-          #endif
-          #endif
-          EOF
+          echo ">>> Injecting susfs.h directly into the exact failing files..."
+          # 1s/^/ means "On line 1, substitute the start of the line with this text"
+          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/proc/base.c
+          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/proc/task_mmu.c
           
-          echo ">>> Injecting custom header into patched files..."
-          find fs/ kernel/ -type f -name "*.c" | xargs grep -l 'susfs_' | while read -r file; do
-            sed -i '1i #include <linux/susfs_custom_flags.h>' "$file"
-          done
+          echo ">>> Injecting AS_FLAGS directly into the 5.15 pagemap enum..."
+          # This specifically targets the opening bracket of the 5.15 mapping_flags enum
+          sed -i 's/enum mapping_flags {/enum mapping_flags {\n\tAS_FLAGS_SUS_MAP = 25,\n\tAS_FLAGS_SUS_KSTAT = 26,\n\tAS_FLAGS_OPEN_REDIRECT = 27,/g' include/linux/pagemap.h
           
       - name: 🔨 Compile Kernel
         run: |
