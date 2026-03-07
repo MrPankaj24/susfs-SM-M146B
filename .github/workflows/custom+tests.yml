@@ -132,12 +132,12 @@ jobs:
           echo ">>> Fixing missing dependencies inside susfs.h..."
           sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
           
-          echo ">>> Injecting susfs.h into all patched files..."
-          # This finds every single C file using SUSFS across all directories and fixes them instantly
+          echo ">>> Safely injecting susfs.h into all patched files..."
+          # This finds every C file using SUSFS and perfectly injects the header AFTER the file's custom macros
           grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
-            sed -i '1s/^/#include <linux\/susfs.h>\n/' "$file"
+            awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
           done
-
+          
       - name: 🔨 Compile Kernel
         run: |
           set -e
