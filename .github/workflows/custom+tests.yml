@@ -126,9 +126,13 @@ jobs:
       - name: 🛡 Patch ReSukiSU for SUSFS
         run: |
           echo ">>> Patching ReSukiSU Kconfig and Makefile to recognize SUSFS..."
-          cd drivers/kernelsu
-          # Use pipefail so the step actually registers as failed if the patch command fails
+          
+          # Go to the actual cloned repo root, NOT the drivers/kernelsu symlink
+          cd KernelSU 
+          
+          # Use pipefail so the step registers as failed if the patch command fails
           set -o pipefail 
+          
           # Apply the patch and mirror the output to a log file
           patch -p1 < /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch | tee /tmp/resukisu_patch.log
           
