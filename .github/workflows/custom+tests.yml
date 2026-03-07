@@ -132,8 +132,11 @@ jobs:
           echo ">>> Fixing missing dependencies inside susfs.h..."
           sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
           
+          echo ">>> Injecting missing definitions into fs/namespace.c..."
+          # This adds the missing IDA and boolean definitions that your manual patch is looking for
+          sed -i '/static DEFINE_IDA(mnt_group_ida);/a static DEFINE_IDA(susfs_mnt_id_ida);\nstatic DEFINE_IDA(susfs_mnt_group_ida);\nbool susfs_is_sdcard_android_data_decrypted = false;' fs/namespace.c
+          
           echo ">>> Safely injecting susfs.h into all patched files..."
-          # This finds every C file using SUSFS and perfectly injects the header AFTER the file's custom macros
           grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
             awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
           done
