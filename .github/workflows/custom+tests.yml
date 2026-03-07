@@ -150,6 +150,11 @@ jobs:
           # Validate and clean up the merged config
           make olddefconfig
 
+          echo ">>> 🔍 VERIFYING CONFIGURATION..."
+          echo "Checking the final .config to see if the compiler accepted our flags:"
+          grep -E "CONFIG_KSU|CONFIG_THREAD_INFO" .config || true
+          echo "=========================================================="
+
           echo ">>> 3. Compiling (Using $(nproc) threads)..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
