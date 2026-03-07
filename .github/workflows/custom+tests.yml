@@ -123,29 +123,6 @@ jobs:
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
           
-      - name: 🛡 Patch ReSukiSU for SUSFS
-        run: |
-          echo ">>> Patching ReSukiSU Kconfig and Makefile to recognize SUSFS..."
-          
-          # Go to the actual cloned repo root, NOT the drivers/kernelsu symlink
-          cd KernelSU 
-          
-          # Use pipefail so the step registers as failed if the patch command fails
-          set -o pipefail 
-          
-          # Apply the patch and mirror the output to a log file
-          patch -p1 < /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch | tee /tmp/resukisu_patch.log
-          
-      - name: 🚨 Upload ReSukiSU Patch Rejects (On Failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: resukisu-patch-rejects
-          path: |
-            drivers/kernelsu/*.rej
-            /tmp/resukisu_patch.log
-          retention-days: 7
-
       - name: 🔨 Compile Kernel
         run: |
           set -e
