@@ -188,26 +188,28 @@ jobs:
           CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
+          # Samsung security - disable all
           # CONFIG_DEFEX is not set
           # CONFIG_DEFEX_KERNEL_ONLY is not set
           # CONFIG_SECURITY_DEFEX is not set
+          # CONFIG_FIVE is not set
+          # CONFIG_FIVE_GKI is not set
+          # CONFIG_PROCA is not set
+          # CONFIG_GAF is not set
           CONFIG_KDP_CRED=n
           CONFIG_KDP_NS=n
           CONFIG_KDP_TEST=n
           CONFIG_RKP=n
           CONFIG_UH=n
           CONFIG_UH_RKP=n
-          # CONFIG_PROCA is not set
-          # CONFIG_GAF is not set
           EOF
 
-          # Remove leading spaces from config lines
           sed -i 's/^[[:space:]]*//' .config
 
           make olddefconfig
 
           echo ">>> Config verification:"
-          grep -E "CONFIG_KSU|CONFIG_DEFEX|CONFIG_KDP|CONFIG_RKP|CONFIG_UH|CONFIG_PROCA" .config || true
+          grep -E "CONFIG_KSU|CONFIG_DEFEX|CONFIG_KDP|CONFIG_RKP|CONFIG_UH|CONFIG_PROCA|CONFIG_FIVE" .config || true
 
           echo ">>> Compiling ($(nproc) threads)..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
