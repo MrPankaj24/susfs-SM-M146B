@@ -1,10 +1,10 @@
 name: 🏗️ Build Kernel (ReSukiSU + Custom + SUSFS)
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+#  push:
+#    branches: [ main ]
+#  pull_request:
+#    branches: [ main ]
   workflow_dispatch:
 
 jobs:
@@ -130,13 +130,14 @@ jobs:
       - name: 🛠️ Fix Android 13 (5.15) Headers
         run: |
           echo ">>> Fixing missing dependencies inside susfs.h..."
-          # This injects the credential and stat headers directly into susfs.h so it never fails
           sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
           
-          echo ">>> Injecting susfs.h into failing procfs files..."
-          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/proc/base.c
-          sed -i '1s/^/#include <linux\/susfs.h>\n/' fs/proc/task_mmu.c
-     
+          echo ">>> Injecting susfs.h into all patched files..."
+          # This finds every single C file using SUSFS across all directories and fixes them instantly
+          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
+            sed -i '1s/^/#include <linux\/susfs.h>\n/' "$file"
+          done
+
       - name: 🔨 Compile Kernel
         run: |
           set -e
