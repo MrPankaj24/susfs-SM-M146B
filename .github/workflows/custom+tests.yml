@@ -127,37 +127,32 @@ jobs:
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
           
-      - name: 🛠️ Final Android 13 (5.15) Namespace Fix
+      - name: 🛠️ Final Android 13 (5.15) Sequence Fix
         run: |
           echo ">>> Fixing missing dependencies inside susfs.h..."
           sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
 
-          echo ">>> Injecting ALL missing SUSFS logic into fs/namespace.c..."
-          # We create a single robust block at the top of the file
-          # We use (1 << 25) instead of BIT(25) to avoid header dependencies
-          cat << 'EOF' > /tmp/namespace_injection.c
-          #include <linux/susfs.h>
-          #ifndef CL_COPY_MNT_NS
-          #define CL_COPY_MNT_NS (1 << 25)
-          #endif
+          echo ">>> Safely injecting susfs.h into all patched files..."
+          # This handles all files (including namespace.c) safely below pr_fmt
+          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
+            if ! grep -q "<linux/susfs.h>" "$file"; then
+              awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
+            fi
+          done
+
+          echo ">>> Injecting missing variables safely AFTER kernel headers..."
+          # By putting this after mnt_group_ida, we guarantee DEFINE_IDA is recognized!
+          cat << 'EOF' > /tmp/namespace_vars.c
           static DEFINE_IDA(susfs_mnt_id_ida);
           static DEFINE_IDA(susfs_mnt_group_ida);
           bool susfs_is_sdcard_android_data_decrypted = false;
           extern bool susfs_is_current_ksu_domain(void);
+          #ifndef CL_COPY_MNT_NS
+          #define CL_COPY_MNT_NS (1 << 25)
+          #endif
           EOF
-
-          # Inject the block right at the top of namespace.c
-          sed -i '1r /tmp/namespace_injection.c' fs/namespace.c
-
-          echo ">>> Safely injecting susfs.h into all other patched files..."
-          # This targets all other files (exec.c, base.c, etc.) using a safe placement
-          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
-            if [ "$file" == "fs/namespace.c" ]; then continue; fi
-            if ! grep -q "<linux/susfs.h>" "$file"; then
-              # Insert after the first #include found to avoid pr_fmt redefinition errors
-              sed -i '0,/^#include/s/^#include/#include <linux\/susfs.h>\n#include/' "$file"
-            fi
-          done
+          
+          sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_vars.c' fs/namespace.c
           
       - name: 🔨 Compile Kernel
         run: |
