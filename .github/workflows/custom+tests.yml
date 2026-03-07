@@ -127,17 +127,29 @@ jobs:
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
 
-      - name: 🛠️ Hardcode Missing SUSFS Includes & Flags
+      - name: 🛠️ The Ultimate SUSFS Injector
         run: |
-          echo ">>> Injecting susfs.h globally via fs.h and proc/internal.h..."
-          echo "#include <linux/susfs.h>" >> include/linux/fs.h
-          echo "#include <linux/susfs.h>" >> fs/proc/internal.h
+          echo ">>> Creating custom SUSFS header for missing flags..."
+          cat << 'EOF' > include/linux/susfs_custom_flags.h
+          #ifndef _SUSFS_CUSTOM_FLAGS_H
+          #define _SUSFS_CUSTOM_FLAGS_H
+          #include <linux/susfs.h>
+          #ifndef AS_FLAGS_SUS_MAP
+          #define AS_FLAGS_SUS_MAP 25
+          #endif
+          #ifndef AS_FLAGS_SUS_KSTAT
+          #define AS_FLAGS_SUS_KSTAT 26
+          #endif
+          #ifndef AS_FLAGS_OPEN_REDIRECT
+          #define AS_FLAGS_OPEN_REDIRECT 27
+          #endif
+          #endif
+          EOF
           
-          echo ">>> Safely injecting AS_FLAGS into pagemap.h enum..."
-          # This injects the flags directly into the enum list BEFORE the closing tag
-          sed -i '/NR_MAPPING_FLAGS/i \        AS_FLAGS_SUS_MAP,' include/linux/pagemap.h
-          sed -i '/NR_MAPPING_FLAGS/i \        AS_FLAGS_SUS_KSTAT,' include/linux/pagemap.h
-          sed -i '/NR_MAPPING_FLAGS/i \        AS_FLAGS_OPEN_REDIRECT,' include/linux/pagemap.h
+          echo ">>> Injecting custom header into patched files..."
+          find fs/ kernel/ -type f -name "*.c" | xargs grep -l 'susfs_' | while read -r file; do
+            sed -i '1i #include <linux/susfs_custom_flags.h>' "$file"
+          done
           
       - name: 🔨 Compile Kernel
         run: |
