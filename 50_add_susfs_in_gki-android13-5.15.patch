@@ -1964,7 +1964,9 @@ index 2ee2c8a31..273c82ec7 100644
 diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
 --- a/include/linux/pagemap.h
 +++ b/include/linux/pagemap.h
-@@ -204,10 +204,20 @@ enum mapping_flags {
+@@ -200,7 +200,17 @@
+ 	AS_MM_ALL_LOCKS	= 2,	/* under mm_take_all_locks() */
+ 	AS_UNEVICTABLE	= 3,	/* e.g., ramdisk, SHM_LOCK */
  	AS_EXITING	= 4, 	/* final truncate in progress */
  	/* writeback related tags are not used */
  	AS_NO_WRITEBACK_TAGS = 5,
@@ -1980,9 +1982,3 @@ diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
 +	AS_FLAGS_SUS_MAP	= 31,
 +#endif
  };
- 
- /**
- 
-  * mapping_set_error - record a writeback error in the address_space
-  * @mapping: the mapping in which an error should be set
-  * @error: the error to set in the mapping
