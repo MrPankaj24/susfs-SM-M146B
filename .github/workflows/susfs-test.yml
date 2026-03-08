@@ -69,13 +69,51 @@ jobs:
           cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
           cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
+      - name: 🧹 Clean Patch File Formatting
+        run: |
+          echo ">>> Removing invisible non-breaking spaces and Windows line endings..."
+          sed -i 's/\xc2\xa0/ /g' /tmp/custom_susfs.patch
+          sed -i 's/\r$//' /tmp/custom_susfs.patch
+
       - name: 🥷 Apply clean SUSFS patch
         run: |
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
-          # Using --dry-run first can help catch errors without failing immediately, 
-          # but applying directly is fine for testing.
-          patch -p1 -l < "$PATCH_FILE"
+          patch -p1 < "$PATCH_FILE"
+
+      - name: 🚨 DEBUG: Dump Failed Hunks and Raw Source
+        if: failure()
+        run: |
+          echo "========================================"
+          echo "❌ PATCH FAILED! GATHERING DEBUG DATA"
+          echo "========================================"
+          
+          echo -e "\n\n>>> 1. REJECTED HUNKS (.rej files) <<<"
+          find . -name "*.rej" -type f | while read -r rej_file; do
+            echo "----------------------------------------"
+            echo "File: $rej_file"
+            echo "----------------------------------------"
+            cat "$rej_file"
+            
+            # Find the original target file name by removing .rej
+            target_file="${rej_file%.rej}"
+            target_file="${target_file#./}"
+            
+            echo -e "\n>>> 2. RAW SOURCE OF FAILED FILE ($target_file) <<<"
+            echo "Dumping first 100 lines with hidden characters visible:"
+            echo "----------------------------------------"
+            if [ -f "$target_file" ]; then
+              head -n 100 "$target_file" | cat -A
+            else
+              echo "File $target_file not found in tree."
+            fi
+            echo -e "\n\n"
+          done
+          
+          echo "========================================"
+          echo "PLEASE COPY AND PASTE THIS ENTIRE OUTPUT TO THE AI"
+          echo "========================================"
+          exit 1
 
       - name: 🔍 Verify Changes
         run: |
