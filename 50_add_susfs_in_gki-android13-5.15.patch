@@ -462,7 +462,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index ff5e6455c..ca45275e6 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -34,6 +34,20 @@
+@@ -34,9 +34,24 @@
  #include <linux/mnt_idmapping.h>
  #include <linux/delay.h>
  #include <linux/fslog.h>
