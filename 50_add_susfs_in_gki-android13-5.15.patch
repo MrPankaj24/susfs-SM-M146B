@@ -1938,7 +1938,7 @@ index 2ee2c8a31..273c82ec7 100644
  struct avc_entry {
  	u32			ssid;
  	u32			tsid;
-@@ -730,11 +736,22 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
+@@ -730,10 +736,21 @@ static void avc_audit_post_callback(struct audit_buffer *ab, void *a)
  
  	rc = security_sid_to_context(sad->state, sad->tsid, &tcontext,
  				     &tcontext_len);
