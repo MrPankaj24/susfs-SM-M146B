@@ -462,7 +462,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index ff5e6455c..ca45275e6 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,6 +32,10 @@
+@@ -31,10 +31,25 @@
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
  #include <linux/delay.h>
@@ -944,7 +944,7 @@ diff --git a/fs/proc/base.c b/fs/proc/base.c
 index 7624ae2c1..81385c36e 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
-@@ -100,6 +100,9 @@
+@@ -100,6 +100,11 @@
  #include <linux/cn_proc.h>
  #include <linux/task_integrity.h>
  #include <linux/proca.h>
