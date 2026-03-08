@@ -462,7 +462,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index ff5e6455c..ca45275e6 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,10 +32,24 @@
+@@ -32,10 +32,25 @@
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
  #include <linux/delay.h>
@@ -1965,7 +1965,7 @@ index 2ee2c8a31..273c82ec7 100644
   diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
 --- a/include/linux/pagemap.h
 +++ b/include/linux/pagemap.h
-@@ -204,6 +204,15 @@ enum mapping_flags {
+@@ -204,6 +204,17 @@ enum mapping_flags {
  	AS_EXITING	= 4, 	/* final truncate in progress */
  	/* writeback related tags are not used */
  	AS_NO_WRITEBACK_TAGS = 5,
