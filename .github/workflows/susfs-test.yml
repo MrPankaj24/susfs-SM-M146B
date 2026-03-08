@@ -1,0 +1,83 @@
+name: 🏗️ Build Kernel (G ReSukiSU + Custom + SUSFS)
+
+on:
+#  push:
+#    branches: [ main ]
+#  pull_request:
+#    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    name: 🏗️ Build s5e8535 / M14
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    env:
+      SUSFS_BRANCH: "gki-android13-5.15"
+      SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      # Point directly to your raw custom patch and fragment files
+      CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
+      CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
+
+      
+    steps:
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: MrPankaj24/SM-M146B-Kernel-Source
+          ref: main
+          fetch-depth: 1
+
+      - name: 🥷 Clone SUSFS Repo (For missing files only)
+        run: |
+          set -e
+          echo ">>> Cloning SUSFS branch ${SUSFS_BRANCH}..."
+          rm -rf /tmp/susfs4ksu
+          git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
+          echo ">>> Cloned /tmp/susfs4ksu"
+
+      - name: ⬇️ Download Custom SUSFS Patch & Fragment
+        run: |
+          echo ">>> Downloading custom patch and defconfig.fragment from MrPankaj24/susfs-SM-M146B..."
+          curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
+          curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
+
+            - name: 📁 Copy missing files from SUSFS
+        run: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          
+          echo ">>> Parsing custom patch for target files..."
+          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
+            | sed 's#^a/##; s#^b/##; s# b/##g' \
+            | tr ' ' '\n' \
+            | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
+
+          echo ">>> Copying target files that are missing in kernel tree from SUSFS repo..."
+          while read -r f; do
+            [ -z "$f" ] && continue
+            candidate="/tmp/susfs4ksu/${f}"
+            if [ ! -e "$f" ]; then
+              if [ -e "$candidate" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "$candidate" . || cp "$candidate" "$f"
+              elif [ -e "/tmp/susfs4ksu/kernel_patches/$f" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "/tmp/susfs4ksu/kernel_patches/$f" . || cp "/tmp/susfs4ksu/kernel_patches/$f" "$f"
+              fi
+            fi
+          done < /tmp/patch_targets.txt || true
+          
+          echo ">>> Force copying core SUSFS headers and C files..."
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
+
+      - name: 🥷 Apply clean SUSFS patch
+        run: |
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          echo ">>> Applying clean local patch: $PATCH_FILE"
+          patch -p1 -l < "$PATCH_FILE"   
+          
