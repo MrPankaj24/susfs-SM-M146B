@@ -65,8 +65,6 @@
 #include <linux/vmalloc.h>
 #include <linux/io_uring.h>
 #include <linux/syscall_user_dispatch.h>
-#ifdef CONFIG_KSU_SUSFS
-#include <linux/susfs_def.h>
 #include <linux/task_integrity.h>
 
 #include <linux/uaccess.h>
