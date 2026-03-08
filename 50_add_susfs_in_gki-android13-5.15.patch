@@ -1961,24 +1961,3 @@ index 2ee2c8a31..273c82ec7 100644
 +#endif
  	tclass = secclass_map[sad->tclass-1].name;
  	audit_log_format(ab, " tclass=%s", tclass);
-diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
---- a/include/linux/pagemap.h
-+++ b/include/linux/pagemap.h
-@@ -200,7 +200,17 @@
- 	AS_MM_ALL_LOCKS	= 2,	/* under mm_take_all_locks() */
- 	AS_UNEVICTABLE	= 3,	/* e.g., ramdisk, SHM_LOCK */
- 	AS_EXITING	= 4, 	/* final truncate in progress */
- 	/* writeback related tags are not used */
- 	AS_NO_WRITEBACK_TAGS = 5,
- 	AS_THP_SUPPORT = 6,	/* THPs supported */
-+
-+#ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-+	AS_FLAGS_OPEN_REDIRECT	= 29,
-+#endif
-+#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-+	AS_FLAGS_SUS_KSTAT	= 30,
-+#endif
-+#ifdef CONFIG_KSU_SUSFS_SUS_MAP
-+	AS_FLAGS_SUS_MAP	= 31,
-+#endif
- };
