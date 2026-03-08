@@ -1,26 +1,20 @@
-name: 🏗️ Build Kernel (G ReSukiSU + Custom + SUSFS)
+name: 🧪 Test SUSFS Patching Logic
 
 on:
-#  push:
-#    branches: [ main ]
-#  pull_request:
-#    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build-kernel:
-    name: 🏗️ Build s5e8535 / M14
+  test-patch:
+    name: 🧪 Test Patch & File Copy
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    timeout-minutes: 10
 
     env:
       SUSFS_BRANCH: "gki-android13-5.15"
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
-      # Point directly to your raw custom patch and fragment files
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
       CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
 
-      
     steps:
       - name: 📥 Checkout Kernel Source
         uses: actions/checkout@v4
@@ -43,7 +37,7 @@ jobs:
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
           curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
 
-            - name: 📁 Copy missing files from SUSFS
+      - name: 📁 Copy missing files from SUSFS
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
@@ -79,5 +73,14 @@ jobs:
         run: |
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
-          patch -p1 -l < "$PATCH_FILE"   
-          
+          # Using --dry-run first can help catch errors without failing immediately, 
+          # but applying directly is fine for testing.
+          patch -p1 -l < "$PATCH_FILE"
+
+      - name: 🔍 Verify Changes
+        run: |
+          echo ">>> Displaying Git Status to verify files were staged/modified:"
+          git status
+          echo ""
+          echo ">>> Displaying high-level diff statistics:"
+          git diff --stat
