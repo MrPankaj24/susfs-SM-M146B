@@ -126,6 +126,23 @@ jobs:
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 -l < "$PATCH_FILE"
+
+      - name: 🥷 Inject pagemap.h SUSFS flags
+        run: |
+          echo ">>> Safely injecting SUSFS flags into pagemap.h..."
+          cat << 'EOF' > /tmp/susfs_pagemap_flags.h
+          
+          #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+          	AS_FLAGS_OPEN_REDIRECT	= 29,
+          #endif
+          #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+          	AS_FLAGS_SUS_KSTAT	= 30,
+          #endif
+          #ifdef CONFIG_KSU_SUSFS_SUS_MAP
+          	AS_FLAGS_SUS_MAP	= 31,
+          #endif
+          EOF
+          sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
           
       - name: 🔨 Compile Kernel
         run: |
