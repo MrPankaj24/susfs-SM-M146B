@@ -83,12 +83,11 @@ index 4f25015aa..17e9e15af 100644
  	return dentry->d_fsdata;
 diff --git a/fs/exec.c b/fs/exec.c
 index b1b9db56a..f977611ff 100644
---- a/fs/exec.c
-+++ b/fs/exec.c
-@@ -65,6 +65,9 @@
- #include <linux/vmalloc.h>
+@@ -65,6 +65,10 @@
  #include <linux/io_uring.h>
  #include <linux/syscall_user_dispatch.h>
+ #include <linux/task_integrity.h>
++
 +#ifdef CONFIG_KSU_SUSFS
 +#include <linux/susfs_def.h>
 +#endif
@@ -461,10 +460,13 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index ff5e6455c..ca45275e6 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,10 +32,24 @@
+@@ -34,6 +34,16 @@
  #include <linux/fs_context.h>
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
+ #include <linux/delay.h>
+ #include <linux/fslog.h>
++ 
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +#include <linux/susfs_def.h>
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
@@ -942,10 +944,13 @@ diff --git a/fs/proc/base.c b/fs/proc/base.c
 index 7624ae2c1..81385c36e 100644
 --- a/fs/proc/base.c
 +++ b/fs/proc/base.c
-@@ -100,6 +100,9 @@
+@@ -100,6 +100,11 @@
  #include <linux/resctrl.h>
  #include <linux/cn_proc.h>
  #include <linux/cpufreq_times.h>
+ #include <linux/task_integrity.h>
+ #include <linux/proca.h>
++ 
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP
 +#include <linux/susfs_def.h>
 +#endif
