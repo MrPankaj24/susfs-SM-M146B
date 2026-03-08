@@ -125,7 +125,7 @@ jobs:
         run: |
           PATCH_FILE="/tmp/custom_susfs.patch"
           echo ">>> Applying clean local patch: $PATCH_FILE"
-          patch -p1 < "$PATCH_FILE"
+          patch -p1 -l < "$PATCH_FILE"
           
       - name: 🔨 Compile Kernel
         run: |
