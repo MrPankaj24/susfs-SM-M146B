@@ -127,33 +127,6 @@ jobs:
           echo ">>> Applying clean local patch: $PATCH_FILE"
           patch -p1 < "$PATCH_FILE"
           
-      - name: 🛠️ Final Android 13 (5.15) Sequence Fix
-        run: |
-          echo ">>> Fixing missing dependencies inside susfs.h..."
-          sed -i '1s/^/#include <linux\/cred.h>\n#include <linux\/stat.h>\n/' include/linux/susfs.h
-
-          echo ">>> Safely injecting susfs.h into all patched files..."
-          # This handles all files (including namespace.c) safely below pr_fmt
-          grep -rl 'susfs_' fs/ kernel/ security/ drivers/ | grep '\.c$' | while read -r file; do
-            if ! grep -q "<linux/susfs.h>" "$file"; then
-              awk '/^#include/ && !done { print; print "#include <linux/susfs.h>"; done=1; next } 1' "$file" > temp.c && mv temp.c "$file"
-            fi
-          done
-
-          echo ">>> Injecting missing variables safely AFTER kernel headers..."
-          # By putting this after mnt_group_ida, we guarantee DEFINE_IDA is recognized!
-          cat << 'EOF' > /tmp/namespace_vars.c
-          static DEFINE_IDA(susfs_mnt_id_ida);
-          static DEFINE_IDA(susfs_mnt_group_ida);
-          bool susfs_is_sdcard_android_data_decrypted = false;
-          extern bool susfs_is_current_ksu_domain(void);
-          #ifndef CL_COPY_MNT_NS
-          #define CL_COPY_MNT_NS (1 << 25)
-          #endif
-          EOF
-          
-          sed -i '/static DEFINE_IDA(mnt_group_ida);/r /tmp/namespace_vars.c' fs/namespace.c
-          
       - name: 🔨 Compile Kernel
         run: |
           set -e
@@ -198,6 +171,16 @@ jobs:
           CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_UH=n
+          CONFIG_UH_RKP=n
+          CONFIG_UH_LKMAUTH=n
+          CONFIG_UH_LKM_BLOCK=n
+          CONFIG_RKP_CFP_JOPP=n
+          CONFIG_RKP_CFP=n
+          CONFIG_SECURITY_DEFEX=n
+          CONFIG_PROCA=n
+          CONFIG_FIVE=n
+          
           EOF
 
           make olddefconfig
