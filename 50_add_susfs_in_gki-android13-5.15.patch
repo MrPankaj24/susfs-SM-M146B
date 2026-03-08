@@ -488,6 +488,7 @@ index ff5e6455c..ca45275e6 100644
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
  
  /* Maximum number of mounts in a mount namespace */
+ unsigned int sysctl_mount_max __read_mostly = 100000;
  
 @@ -135,6 +149,17 @@ static int mnt_alloc_id(struct mount *mnt)
  
