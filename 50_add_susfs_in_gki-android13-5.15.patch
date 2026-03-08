@@ -462,7 +462,7 @@ diff --git a/fs/namespace.c b/fs/namespace.c
 index ff5e6455c..ca45275e6 100644
 --- a/fs/namespace.c
 +++ b/fs/namespace.c
-@@ -32,10 +32,25 @@
+@@ -31,10 +31,25 @@
  #include <linux/shmem_fs.h>
  #include <linux/mnt_idmapping.h>
  #include <linux/delay.h>
@@ -488,8 +488,7 @@ index ff5e6455c..ca45275e6 100644
 +
  /* Maximum number of mounts in a mount namespace */
  unsigned int sysctl_mount_max __read_mostly = 100000;
- 
-@@ -135,6 +149,17 @@ static int mnt_alloc_id(struct mount *mnt)
+@@ -138,6 +153,16 @@
  
  static void mnt_free_id(struct mount *mnt)
  {
@@ -498,16 +497,14 @@ index ff5e6455c..ca45275e6 100644
 +		ida_free(&susfs_mnt_id_ida, mnt->mnt_id);
 +		return;
 +	}
-+
 +	if (mnt->mnt.mnt_flags & VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT) {
 +		return;
 +	}
-+
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
  	ida_free(&mnt_id_ida, mnt->mnt_id);
  }
  
-@@ -143,7 +168,25 @@ static void mnt_free_id(struct mount *mnt)
+@@ -146,7 +171,25 @@
   */
  static int mnt_alloc_group_id(struct mount *mnt)
  {
@@ -515,13 +512,13 @@ index ff5e6455c..ca45275e6 100644
 +	int res;
 +
 +	/* - mnt_alloc_group_id will unlikely get called after screen is unlocked on reboot,
-+	 *   so here we can persistently check if current is ksu domain, and assign a sus
-+	 *   mnt_group_id if so.
++	 * so here we can persistently check if current is ksu domain, and assign a sus
++	 * mnt_group_id if so.
 +	 * - Also we can re-use the original mnt_group_ida so there is no need to use
-+	 *   another ida nor hook the mnt_release_group_id() function.
++	 * another ida nor hook the mnt_release_group_id() function.
 +	 */
 +	if (susfs_is_current_ksu_domain()) {
-+		res = ida_alloc_min(&susfs_mnt_group_ida, DEFAULT_KSU_MNT_GROUP_ID, GFP_KERNEL);
++		res = ida_alloc_min(&susfs_mnt_group_ida, DEFAULT_KSU_MNT_ID, GFP_KERNEL);
 +		goto bypass_orig_flow;
 +	}
 +
@@ -533,12 +530,12 @@ index ff5e6455c..ca45275e6 100644
  
  	if (res < 0)
  		return res;
-@@ -156,6 +199,13 @@ static int mnt_alloc_group_id(struct mount *mnt)
+@@ -160,6 +203,13 @@
   */
  void mnt_release_group_id(struct mount *mnt)
  {
 +#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-+	if (mnt->mnt_group_id >= DEFAULT_KSU_MNT_GROUP_ID) {
++	if (mnt->mnt_group_id >= DEFAULT_KSU_MNT_ID) {
 +		ida_free(&susfs_mnt_group_ida, mnt->mnt_group_id);
 +		mnt->mnt_group_id = 0;
 +		return;
@@ -547,7 +544,7 @@ index ff5e6455c..ca45275e6 100644
  	ida_free(&mnt_group_ida, mnt->mnt_group_id);
  	mnt->mnt_group_id = 0;
  }
-@@ -193,6 +243,119 @@ int mnt_get_count(struct mount *mnt)
+@@ -198,4 +248,119 @@
  #endif
  }
  
@@ -666,8 +663,7 @@ index ff5e6455c..ca45275e6 100644
 +
  static struct mount *alloc_vfsmnt(const char *name)
  {
- 	struct mount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
-@@ -967,7 +1130,19 @@ struct vfsmount *vfs_create_mount(struct fs_context *fc)
+@@ -957,7 +1120,19 @@
  	if (!fc->root)
  		return ERR_PTR(-EINVAL);
  
@@ -686,8 +682,7 @@ index ff5e6455c..ca45275e6 100644
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
  	if (!mnt)
  		return ERR_PTR(-ENOMEM);
- 
-@@ -1053,8 +1228,45 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
+@@ -1045,8 +1220,45 @@
  	struct super_block *sb = old->mnt.mnt_sb;
  	struct mount *mnt;
  	int err;
@@ -732,8 +727,7 @@ index ff5e6455c..ca45275e6 100644
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
  	if (!mnt)
  		return ERR_PTR(-ENOMEM);
- 
-@@ -1072,6 +1284,12 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
+@@ -1064,6 +1276,12 @@
  	mnt->mnt.mnt_flags = old->mnt.mnt_flags;
  	mnt->mnt.mnt_flags &= ~(MNT_WRITE_HOLD|MNT_MARKED|MNT_INTERNAL);
  
@@ -744,9 +738,7 @@ index ff5e6455c..ca45275e6 100644
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 +
  	atomic_inc(&sb->s_active);
- 	mnt->mnt.mnt_userns = mnt_user_ns(&old->mnt);
- 	if (!initial_idmapping(mnt->mnt.mnt_userns))
-@@ -3462,6 +3680,9 @@ struct mnt_namespace *copy_mnt_ns(unsigned long flags, struct mnt_namespace *ns,
+@@ -3463,6 +3681,9 @@
  	copy_flags = CL_COPY_UNBINDABLE | CL_EXPIRE;
  	if (user_ns != ns->user_ns)
  		copy_flags |= CL_SHARED_TO_SLAVE;
@@ -754,9 +746,7 @@ index ff5e6455c..ca45275e6 100644
 +	copy_flags |= CL_COPY_MNT_NS;
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
  	new = copy_tree(old, old->mnt.mnt_root, copy_flags);
- 	if (IS_ERR(new)) {
- 		namespace_unlock();
-@@ -4669,3 +4890,32 @@ const struct proc_ns_operations mntns_operations = {
+@@ -4673,3 +4894,32 @@
  	.install	= mntns_install,
  	.owner		= mntns_owner,
  };
@@ -773,8 +763,8 @@ index ff5e6455c..ca45275e6 100644
 +}
 +
 +/* - To retrieve the non sus vfsmount from vfsmount, takes a reference on &mnt->mnt and mnt->mnt.mnt_root */
-+struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmnt) {
-+	struct mount *mnt = real_mount(vfsmnt);
++struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *vfsmount) {
++	struct mount *mnt = real_mount(vfsmount);
 +
 +	lock_mount_hash();
 +	for (; mnt && mnt->mnt_parent && mnt != mnt->mnt_parent && mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }
@@ -789,7 +779,7 @@ index ff5e6455c..ca45275e6 100644
 +	return &mnt->mnt;
 +}
 +#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-\ No newline at end of file
++
 diff --git a/fs/notify/fdinfo.c b/fs/notify/fdinfo.c
 index 3451708fd..7395a4a0a 100644
 --- a/fs/notify/fdinfo.c
