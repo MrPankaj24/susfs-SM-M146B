@@ -1961,11 +1961,10 @@ index 2ee2c8a31..273c82ec7 100644
 +#endif
  	tclass = secclass_map[sad->tclass-1].name;
  	audit_log_format(ab, " tclass=%s", tclass);
-
-  diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
+diff --git a/include/linux/pagemap.h b/include/linux/pagemap.h
 --- a/include/linux/pagemap.h
 +++ b/include/linux/pagemap.h
-@@ -204,6 +204,17 @@ enum mapping_flags {
+@@ -204,4 +204,14 @@ enum mapping_flags {
  	AS_EXITING	= 4, 	/* final truncate in progress */
  	/* writeback related tags are not used */
  	AS_NO_WRITEBACK_TAGS = 5,
@@ -1980,7 +1979,3 @@ index 2ee2c8a31..273c82ec7 100644
 +#ifdef CONFIG_KSU_SUSFS_SUS_MAP
 +	AS_FLAGS_SUS_MAP	= 31,
 +#endif
- };
- 
- /**
- 
