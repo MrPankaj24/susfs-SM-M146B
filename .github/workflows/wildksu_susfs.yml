@@ -81,7 +81,7 @@ jobs:
 
       - name: 🛡️ Inject WKSU
         run: |
-         curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -s wild
+          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/stable/kernel/setup.sh" | bash -s stable
           
       - name: 📁 Copy missing files from SUSFS
         run: |
