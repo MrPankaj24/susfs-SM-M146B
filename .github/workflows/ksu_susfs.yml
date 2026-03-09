@@ -53,7 +53,7 @@ jobs:
 
       - name: 🛡️ Setup KernelSU
         run: |
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash - 
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash - main
 
       - name: 🥷 Clone SUSFS & Download Patches
         run: |
