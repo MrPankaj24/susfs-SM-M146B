@@ -16,7 +16,6 @@ jobs:
     env:
       SUSFS_BRANCH: "gki-android13-5.15"
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
-      # Point directly to your raw custom patch and fragment files
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
       CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
 
@@ -70,39 +69,26 @@ jobs:
         run: |
           git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
 
-      - name: 🥷 Clone SUSFS Repo (For missing files only)
+      - name: 🥷 Clone SUSFS Repo
         run: |
           set -e
-          echo ">>> Cloning SUSFS branch ${SUSFS_BRANCH}..."
-          rm -rf /tmp/susfs4ksu
           git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
-          echo ">>> Cloned /tmp/susfs4ksu"
 
       - name: ⬇️ Download Custom SUSFS Patch & Fragment
         run: |
-          echo ">>> Downloading custom patch and defconfig.fragment from MrPankaj24/susfs-SM-M146B..."
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
           curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
 
       - name: 🛡️ Inject ReSukiSU
         run: |
-          echo ">>> Injecting ReSukiSU..."
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
           
       - name: 📁 Copy missing files from SUSFS
         run: |
           #!/usr/bin/env bash
           set -euo pipefail
-          
           PATCH_FILE="/tmp/custom_susfs.patch"
-          
-          echo ">>> Parsing custom patch for target files..."
-          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
-            | sed 's#^a/##; s#^b/##; s# b/##g' \
-            | tr ' ' '\n' \
-            | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
-
-          echo ">>> Copying target files that are missing in kernel tree from SUSFS repo..."
+          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' | sed 's#^a/##; s#^b/##; s# b/##g' | tr ' ' '\n' | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
           while read -r f; do
             [ -z "$f" ] && continue
             candidate="/tmp/susfs4ksu/${f}"
@@ -116,20 +102,16 @@ jobs:
               fi
             fi
           done < /tmp/patch_targets.txt || true
-          
-          echo ">>> Force copying core SUSFS headers and C files..."
           cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
           cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
-      - name: 🥷 Apply clean SUSFS patch
+      - name: 🥷 Apply SUSFS patch
         run: |
-          PATCH_FILE="/tmp/custom_susfs.patch"
-          echo ">>> Applying clean local patch: $PATCH_FILE"
-          patch -p1 -l < "$PATCH_FILE"
+          patch -p1 -l < /tmp/custom_susfs.patch
 
       - name: 🥷 Inject pagemap.h SUSFS flags
         run: |
-          echo ">>> Safely injecting SUSFS flags into pagemap.h (No ifdefs)..."
+          echo ">>> Safely injecting SUSFS flags into pagemap.h..."
           cat << 'EOF' > /tmp/susfs_pagemap_flags.h
               AS_FLAGS_OPEN_REDIRECT    = 29,
               AS_FLAGS_SUS_KSTAT        = 30,
@@ -137,15 +119,12 @@ jobs:
           EOF
           sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
           
-      - name: 🥷 THE NUKE (Bypass EVERYTHING)
+      - name: 🥷 THE NUKE (Bypass Kconfig/Makefile Logic)
         run: |
           echo ">>> 1. Forcing Kbuild to compile susfs.c UNCONDITIONALLY..."
-          # This removes the dependency on CONFIG_KSU_SUSFS for this one file
           echo "obj-y += susfs.o" >> fs/Makefile
           
           echo ">>> 2. Jamming compiler flags directly into the susfs.o target..."
-          # This ensures that even if CONFIG_KSU_SUSFS is missing from .config, 
-          # the compiler treats it as 'defined' for the susfs.c file itself.
           cat << 'EOF' >> fs/Makefile
           CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS=1
           CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MOUNT=1
@@ -156,8 +135,6 @@ jobs:
           EOF
           
           echo ">>> 3. Force-injecting macros to C headers so callers (statfs, fd) see them..."
-          # Since statfs.c and fd.c include susfs.h, we put the defines at the top
-          # so they always 'see' that SUSFS is active.
           sed -i '1i #define CONFIG_KSU_SUSFS 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT 1' include/linux/susfs.h
@@ -170,10 +147,8 @@ jobs:
           set -o pipefail
           export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
           export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
-
           export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
           export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
-
           export DTC_FLAGS="-@"
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
@@ -208,17 +183,10 @@ jobs:
           CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
-          
           EOF
 
           make olddefconfig
-
-          echo ">>> 🔍 VERIFYING CONFIGURATION..."
-          echo "Checking the final .config to see if the compiler accepted our flags:"
-          grep -E "CONFIG_KSU|CONFIG_THREAD_INFO" .config || true
-          echo "=========================================================="
-
-          echo ">>> 3. Compiling (Using $(nproc) threads)..."
+          echo ">>> 3. Compiling..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
       - name: 📦 Collect Artifacts
