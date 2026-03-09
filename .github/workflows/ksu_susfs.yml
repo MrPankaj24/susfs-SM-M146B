@@ -1,0 +1,119 @@
+name: 🏗️ Build Kernel (KernelSU + SUSFS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    name: 🏗️ Build s5e8535 / M14
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    env:
+      SUSFS_BRANCH: "gki-android13-5.15"
+      SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
+      CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
+
+    steps:
+      - name: 📥 Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: MrPankaj24/SM-M146B-Kernel-Source
+          ref: main
+          fetch-depth: 1
+
+      - name: 📦 Install Build Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            git curl wget bc bison flex libssl-dev libelf-dev python3 python-is-python3 \
+            make gcc gcc-aarch64-linux-gnu binutils binutils-aarch64-linux-gnu \
+            g++ cpio zip unzip lz4 zstd xz-utils libncurses-dev libncurses5-dev \
+            kmod rsync lld llvm clang dwarves pahole ccache device-tree-compiler \
+            zlib1g-dev libc6-dev-i386 cmake ninja-build
+
+      - name: 🔧 Cache Toolchains
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            toolchain/clang/host/linux-x86/clang-r450784d
+            toolchain/build/kernel/build-tools
+            toolchain/prebuilts/kernel-build-tools
+          key: toolchain-clang-r450784d-v1
+
+      - name: ⬇️ Download Clang & Build Tools
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
+          curl -L "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz" -o /tmp/clang.tar.gz
+          tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
+          git clone --depth=1 -b main https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/build/kernel/build-tools
+          git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
+
+      - name: 🛡️ Setup KernelSU
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash - 
+
+      - name: 🥷 Clone SUSFS & Download Patches
+        run: |
+          git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
+          curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
+
+      - name: 🩹 Apply SUSFS Patches (KernelSU + Kernel)
+        run: |
+          # 1. Apply the SUSFS patch for KernelSU
+          cd KernelSU
+          patch -p1 < /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          cd ..
+
+          # 2. Copy missing SUSFS files to kernel
+          cp /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          
+          # 3. Apply the main SUSFS patch
+          patch -p1 < /tmp/custom_susfs.patch
+
+      - name: 🏗️ Force SUSFS Compilation
+        run: |
+          echo "obj-y += susfs.o" >> fs/Makefile
+          # Force the flags so they are always active
+          cat << 'EOF' >> fs/Makefile
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MOUNT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_KSTAT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_PATH=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_OPEN_REDIRECT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MAP=1
+          EOF
+
+      - name: 🔨 Compile Kernel
+        run: |
+          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
+          export LLVM=1 ARCH=arm64 TARGET_SOC=s5e8535
+          
+          make s5e8535-m14xnsxx_defconfig
+          
+          # Add KSU and SUSFS configs
+          cat << 'EOF' >> .config
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          EOF
+          
+          make olddefconfig
+          make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
+
+      - name: ⬆️ Upload Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-m14-ksu-susfs
+          path: |
+            arch/arm64/boot/Image
+            /tmp/kernel_build.log
