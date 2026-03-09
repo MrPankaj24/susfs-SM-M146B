@@ -137,65 +137,32 @@ jobs:
           EOF
           sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
           
-      - name: 🥷 Inject SUSFS into Master Kconfig (The Clean Way)
+      - name: 🥷 THE NUKE (Bypass EVERYTHING)
         run: |
-          echo ">>> 1. Creating the SUSFS rulebook..."
-          cat << 'EOF' > fs/Kconfig.susfs
-          menu "SUSFS Configuration"
-          config KSU_SUSFS
-              bool "SUSFS"
-              default y
-          config KSU_SUSFS_SUS_PATH
-              bool
-              default y
-          config KSU_SUSFS_SUS_MOUNT
-              bool
-              default y
-          config KSU_SUSFS_SUS_KSTAT
-              bool
-              default y
-          config KSU_SUSFS_SUS_KSTAT_REDIRECT
-              bool
-              default y
-          config KSU_SUSFS_SUS_MAP
-              bool
-              default y
-          config KSU_SUSFS_SPOOF_UNAME
-              bool
-              default y
-          config KSU_SUSFS_ENABLE_LOG
-              bool
-              default y
-          config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
-              bool
-              default y
-          config KSU_SUSFS_OPEN_REDIRECT
-              bool
-              default y
-          config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-              bool
-              default y
-          config KSU_SUSFS_UNICODE_FILTER
-              bool
-              default y
-          config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
-              bool
-              default y
-          config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
-              bool
-              default y
-          endmenu
+          echo ">>> 1. Forcing Kbuild to compile susfs.c UNCONDITIONALLY..."
+          echo "obj-y += susfs.o" >> fs/Makefile
+          
+          echo ">>> 2. Jamming compiler flags directly into the susfs.o target..."
+          cat << 'EOF' >> fs/Makefile
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_PATH=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MOUNT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_KSTAT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MAP=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SPOOF_UNAME=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_ENABLE_LOG=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_OPEN_REDIRECT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=1
+          CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=1
           EOF
           
-          echo ">>> 2. Tying it to the MASTER rulebook (arch/arm64/Kconfig)..."
-          echo 'source "fs/Kconfig.susfs"' >> arch/arm64/Kconfig
-          
-          echo ">>> 3. Telling the Makefile to listen to the rulebook..."
-          echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
-          
-          echo ">>> 4. Force-injecting macros to C headers just to be safe..."
+          echo ">>> 3. Force-injecting macros to C headers so callers (statfs, fd) see them..."
           sed -i '1i #define CONFIG_KSU_SUSFS 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MAP 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_OPEN_REDIRECT 1' include/linux/susfs.h
 
       - name: 🔨 Compile Kernel
         run: |
