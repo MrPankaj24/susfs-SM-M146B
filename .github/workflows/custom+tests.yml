@@ -136,27 +136,61 @@ jobs:
               AS_FLAGS_SUS_MAP          = 31,
           EOF
           sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
-
-      - name: 🥷 Force SUSFS Macros (Bypass Kconfig Drop)
+      - name: 🥷 Patch Kconfig and Makefile (The Ultimate Fix)
         run: |
-          echo ">>> Forcing SUS_MOUNT and other sub-configs directly into susfs.h..."
+          echo ">>> 1. Patching fs/Kconfig so olddefconfig accepts SUSFS..."
+          cat << 'EOF' >> fs/Kconfig
+          
+          config KSU_SUSFS
+              bool "SUSFS"
+              default y
+          config KSU_SUSFS_SUS_PATH
+              bool
+              default y
+          config KSU_SUSFS_SUS_MOUNT
+              bool
+              default y
+          config KSU_SUSFS_SUS_KSTAT
+              bool
+              default y
+          config KSU_SUSFS_SUS_KSTAT_REDIRECT
+              bool
+              default y
+          config KSU_SUSFS_SUS_MAP
+              bool
+              default y
+          config KSU_SUSFS_SPOOF_UNAME
+              bool
+              default y
+          config KSU_SUSFS_ENABLE_LOG
+              bool
+              default y
+          config KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+              bool
+              default y
+          config KSU_SUSFS_OPEN_REDIRECT
+              bool
+              default y
+          config KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+              bool
+              default y
+          config KSU_SUSFS_UNICODE_FILTER
+              bool
+              default y
+          config KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT
+              bool
+              default y
+          config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
+              bool
+              default y
+          EOF
+          
+          echo ">>> 2. Patching fs/Makefile so it actually compiles susfs.c..."
+          echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
+          
+          echo ">>> 3. Force-injecting macros to C headers just to be safe..."
           sed -i '1i #define CONFIG_KSU_SUSFS 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_PATH 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_OPEN_REDIRECT 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MAP 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_SPOOF_UNAME 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_ENABLE_LOG 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG 1' include/linux/susfs.h
-          sed -i '1i #define CONFIG_KSU_SUSFS_UNICODE_FILTER 1' include/linux/susfs.h
-          
-          echo ">>> Forcing fs/Makefile to unconditionally compile susfs.c..."
-          echo "obj-y += susfs.o" >> fs/Makefile
 
       - name: 🔨 Compile Kernel
         run: |
