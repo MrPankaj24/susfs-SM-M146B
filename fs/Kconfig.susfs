@@ -1,0 +1,25 @@
+menu "SUSFS Configuration"
+config KSU_SUSFS
+    bool "SUSFS Support"
+    default y
+config KSU_SUSFS_SUS_MOUNT
+    bool "Hiding Mount Points"
+    depends on KSU_SUSFS
+    default y
+config KSU_SUSFS_SUS_KSTAT
+    bool "KSTAT Hiding"
+    depends on KSU_SUSFS
+    default y
+config KSU_SUSFS_SUS_PATH
+    bool "Path Hiding"
+    depends on KSU_SUSFS
+    default y
+config KSU_SUSFS_OPEN_REDIRECT
+    bool "Open Redirect"
+    depends on KSU_SUSFS
+    default y
+config KSU_SUSFS_SUS_MAP
+    bool "Map Hiding"
+    depends on KSU_SUSFS
+    default y
+endmenu
