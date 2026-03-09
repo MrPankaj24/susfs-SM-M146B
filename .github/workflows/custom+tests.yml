@@ -137,11 +137,11 @@ jobs:
           EOF
           sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
           
-      - name: 🥷 Patch Kconfig and Makefile (The Ultimate Fix)
+      - name: 🥷 Inject SUSFS into Master Kconfig (The Clean Way)
         run: |
-          echo ">>> 1. Patching fs/Kconfig so olddefconfig accepts SUSFS..."
-          cat << 'EOF' >> fs/Kconfig
-          
+          echo ">>> 1. Creating the SUSFS rulebook..."
+          cat << 'EOF' > fs/Kconfig.susfs
+          menu "SUSFS Configuration"
           config KSU_SUSFS
               bool "SUSFS"
               default y
@@ -184,12 +184,16 @@ jobs:
           config KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT
               bool
               default y
+          endmenu
           EOF
           
-          echo ">>> 2. Patching fs/Makefile so it actually compiles susfs.c..."
+          echo ">>> 2. Tying it to the MASTER rulebook (arch/arm64/Kconfig)..."
+          echo 'source "fs/Kconfig.susfs"' >> arch/arm64/Kconfig
+          
+          echo ">>> 3. Telling the Makefile to listen to the rulebook..."
           echo "obj-\$(CONFIG_KSU_SUSFS) += susfs.o" >> fs/Makefile
           
-          echo ">>> 3. Force-injecting macros to C headers just to be safe..."
+          echo ">>> 4. Force-injecting macros to C headers just to be safe..."
           sed -i '1i #define CONFIG_KSU_SUSFS 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
 
@@ -237,15 +241,6 @@ jobs:
           CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_UH=n
-          CONFIG_UH_RKP=n
-          CONFIG_UH_LKMAUTH=n
-          CONFIG_UH_LKM_BLOCK=n
-          CONFIG_RKP_CFP_JOPP=n
-          CONFIG_RKP_CFP=n
-          CONFIG_SECURITY_DEFEX=n
-          CONFIG_PROCA=n
-          CONFIG_FIVE=n
           
           EOF
 
