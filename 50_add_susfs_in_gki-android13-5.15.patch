@@ -1960,4 +1960,15 @@ index 2ee2c8a31..273c82ec7 100644
 +#endif
  	tclass = secclass_map[sad->tclass-1].name;
  	audit_log_format(ab, " tclass=%s", tclass);
+
+--- a/include/linux/susfs_def.h
++++ b/include/linux/susfs_def.h
+@@ -58,5 +58,5 @@
+ 
+-#define AS_FLAGS_SUS_KSTAT 35
+-#define AS_FLAGS_OPEN_REDIRECT 36
+-#define AS_FLAGS_SUS_MAP 39
++//#define AS_FLAGS_SUS_KSTAT 35
++//#define AS_FLAGS_OPEN_REDIRECT 36
++//#define AS_FLAGS_SUS_MAP 39
  
