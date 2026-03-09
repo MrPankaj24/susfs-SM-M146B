@@ -13,6 +13,7 @@ jobs:
       SUSFS_BRANCH: "gki-android13-5.15"
       SUSFS_URL: "https://gitlab.com/simonpunk/susfs4ksu.git"
       CUSTOM_PATCH_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/50_add_susfs_in_gki-android13-5.15.patch"
+      CUSTOM_FRAG_URL: "https://raw.githubusercontent.com/MrPankaj24/susfs-SM-M146B/main/defconfig.fragment"
 
     steps:
       - name: 📥 Checkout Kernel Source
@@ -42,23 +43,41 @@ jobs:
             toolchain/prebuilts/kernel-build-tools
           key: toolchain-clang-r450784d-v1
 
-      - name: ⬇️ Download Clang & Build Tools
+      - name: ⬇️ Download Clang r450784d (AOSP)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
+          echo "Downloading Clang r450784d..."
           curl -L "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz" -o /tmp/clang.tar.gz
           tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
+          rm /tmp/clang.tar.gz
+
+      - name: ⬇️ Download Kernel Build Tools
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
           git clone --depth=1 -b main https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/build/kernel/build-tools
+          mkdir -p toolchain/build/kernel/build-tools/path
+          ln -sf $(pwd)/toolchain/build/kernel/build-tools/linux-x86 toolchain/build/kernel/build-tools/path/linux-x86
+          ln -sf $(pwd)/toolchain/build/kernel/build-tools/sysroots/x86_64-unknown-linux-musl toolchain/build/kernel/build-tools/sysroot
+
+      - name: ⬇️ Download Prebuilt Tools (for pahole)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
           git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
 
-      - name: 🛡️ Setup KernelSU
+      - name: 🛡️ Setup KernelSU (Official)
         run: |
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
 
-      - name: 🥷 Clone SUSFS & Download Patches
+      - name: 🥷 Clone SUSFS Repo
         run: |
+          set -e
           git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
+
+      - name: ⬇️ Download Custom SUSFS Patch & Fragment
+        run: |
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
+          curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
 
       - name: 🩹 Apply SUSFS Patches (KernelSU + Kernel)
         run: |
@@ -67,17 +86,29 @@ jobs:
           patch -p1 < /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
           cd ..
 
-          # 2. Copy ALL missing SUSFS files to kernel
-          cp /tmp/susfs4ksu/kernel_patches/fs/* fs/
-          cp /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
+          # 2. Copy ALL missing SUSFS files to kernel (replaces the old complex grep script)
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
           
-          # 3. Apply the main SUSFS patch
-          patch -p1 < /tmp/custom_susfs.patch
+          # 3. Apply the main custom SUSFS patch
+          patch -p1 -l < /tmp/custom_susfs.patch
 
-      - name: 🏗️ Force SUSFS Compilation
+      - name: 🥷 Inject pagemap.h SUSFS flags
         run: |
+          echo ">>> Safely injecting SUSFS flags into pagemap.h..."
+          cat << 'EOF' > /tmp/susfs_pagemap_flags.h
+              AS_FLAGS_OPEN_REDIRECT    = 29,
+              AS_FLAGS_SUS_KSTAT        = 30,
+              AS_FLAGS_SUS_MAP          = 31,
+          EOF
+          sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
+          
+      - name: 🥷 THE NUKE (Bypass Kconfig/Makefile Logic)
+        run: |
+          echo ">>> 1. Forcing Kbuild to compile susfs.c UNCONDITIONALLY..."
           echo "obj-y += susfs.o" >> fs/Makefile
-          # Force the flags so they are always active
+          
+          echo ">>> 2. Jamming compiler flags directly into the susfs.o target..."
           cat << 'EOF' >> fs/Makefile
           CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS=1
           CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MOUNT=1
@@ -86,34 +117,85 @@ jobs:
           CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_OPEN_REDIRECT=1
           CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MAP=1
           EOF
+          
+          echo ">>> 3. Force-injecting macros to C headers so callers (statfs, fd) see them..."
+          sed -i '1i #define CONFIG_KSU_SUSFS 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MAP 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_OPEN_REDIRECT 1' include/linux/susfs.h
 
       - name: 🔨 Compile Kernel
         run: |
-          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
-          export LLVM=1 ARCH=arm64 TARGET_SOC=s5e8535
-          
+          set -e
+          set -o pipefail
+          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
+          export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
+          export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
+          export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
+          export DTC_FLAGS="-@"
+          export PLATFORM_VERSION=15
+          export ANDROID_MAJOR_VERSION=v
+          export LLVM=1
+          export DEPMOD=depmod
+          export ARCH=arm64
+          export TARGET_SOC=s5e8535
+
+          echo ">>> 1. Generating Base Config..."
           make s5e8535-m14xnsxx_defconfig
-          
-          # Add KSU and SUSFS configs
+
+          echo ">>> 2. Injecting SUSFS Configuration directly..."
           cat << 'EOF' >> .config
           CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_THREAD_INFO_IN_TASK=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_UNICODE_FILTER=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
           EOF
-          
+
           make olddefconfig
+          echo ">>> 3. Compiling..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
-      - name: ⬆️ Upload Artifacts
-        if: always()
+      - name: 📦 Collect Artifacts
+        if: success()
+        run: |
+          mkdir -p out/kernel
+          [ -f arch/arm64/boot/Image ] && cp arch/arm64/boot/Image out/kernel/
+          [ -f arch/arm64/boot/Image.gz ] && cp arch/arm64/boot/Image.gz out/kernel/
+          if [ -d arch/arm64/boot/dts/exynos ]; then
+            mkdir -p out/dtbs
+            find arch/arm64/boot/dts/exynos -name "*.dtb" | grep -i "s5e8535\|m14" | xargs -I{} cp {} out/dtbs/ 2>/dev/null || true
+          fi
+
+      - name: ⬆️ Upload Final Kernel
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-m14-ksu-susfs
-          path: |
-            arch/arm64/boot/Image
-            /tmp/kernel_build.log
+          name: kernel-s5e8535-ksu-susfs
+          path: out/
+          retention-days: 30
+
+      - name: ⬆️ Upload Build Log (On Failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-failure
+          path: /tmp/kernel_build.log
+          retention-days: 7
