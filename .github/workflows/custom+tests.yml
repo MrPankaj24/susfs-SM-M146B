@@ -81,7 +81,7 @@ jobs:
 
       - name: 🛡️ Inject ReSukiSU
         run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/sync-susfs/kernel/setup.sh" | bash
           
       - name: 📁 Copy missing files from SUSFS
         run: |
