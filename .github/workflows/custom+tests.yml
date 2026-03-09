@@ -108,6 +108,16 @@ jobs:
       - name: 🥷 Apply SUSFS patch
         run: |
           patch -p1 -l < /tmp/custom_susfs.patch
+
+      - name: 🥷 Inject pagemap.h SUSFS flags
+        run: |
+          echo ">>> Safely injecting SUSFS flags into pagemap.h..."
+          cat << 'EOF' > /tmp/susfs_pagemap_flags.h
+              AS_FLAGS_OPEN_REDIRECT    = 29,
+              AS_FLAGS_SUS_KSTAT        = 30,
+              AS_FLAGS_SUS_MAP          = 31,
+          EOF
+          sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
           
       - name: 🔨 Compile Kernel
         run: |
