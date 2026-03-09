@@ -140,6 +140,7 @@ jobs:
       - name: 🥷 Force SUSFS Macros (Bypass Kconfig Drop)
         run: |
           echo ">>> Forcing SUS_MOUNT and other sub-configs directly into susfs.h..."
+          sed -i '1i #define CONFIG_KSU_SUSFS 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SUS_PATH 1' include/linux/susfs.h
@@ -153,6 +154,9 @@ jobs:
           sed -i '1i #define CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG 1' include/linux/susfs.h
           sed -i '1i #define CONFIG_KSU_SUSFS_UNICODE_FILTER 1' include/linux/susfs.h
+          
+          echo ">>> Forcing fs/Makefile to unconditionally compile susfs.c..."
+          echo "obj-y += susfs.o" >> fs/Makefile
 
       - name: 🔨 Compile Kernel
         run: |
