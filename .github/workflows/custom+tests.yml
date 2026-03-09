@@ -129,21 +129,31 @@ jobs:
 
       - name: 🥷 Inject pagemap.h SUSFS flags
         run: |
-          echo ">>> Safely injecting SUSFS flags into pagemap.h..."
+          echo ">>> Safely injecting SUSFS flags into pagemap.h (No ifdefs)..."
           cat << 'EOF' > /tmp/susfs_pagemap_flags.h
-          
-          #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-          	AS_FLAGS_OPEN_REDIRECT	= 29,
-          #endif
-          #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-          	AS_FLAGS_SUS_KSTAT	= 30,
-          #endif
-          #ifdef CONFIG_KSU_SUSFS_SUS_MAP
-          	AS_FLAGS_SUS_MAP	= 31,
-          #endif
+              AS_FLAGS_OPEN_REDIRECT    = 29,
+              AS_FLAGS_SUS_KSTAT        = 30,
+              AS_FLAGS_SUS_MAP          = 31,
           EOF
           sed -i '/AS_THP_SUPPORT = 6,/r /tmp/susfs_pagemap_flags.h' include/linux/pagemap.h
-          
+
+      - name: 🥷 Force SUSFS Macros (Bypass Kconfig Drop)
+        run: |
+          echo ">>> Forcing SUS_MOUNT and other sub-configs directly into susfs.h..."
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MOUNT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_PATH 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_OPEN_REDIRECT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_MAP 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SPOOF_UNAME 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_ENABLE_LOG 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG 1' include/linux/susfs.h
+          sed -i '1i #define CONFIG_KSU_SUSFS_UNICODE_FILTER 1' include/linux/susfs.h
+
       - name: 🔨 Compile Kernel
         run: |
           set -e
