@@ -67,9 +67,9 @@ jobs:
           patch -p1 < /tmp/susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
           cd ..
 
-          # 2. Copy missing SUSFS files to kernel
-          cp /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          # 2. Copy ALL missing SUSFS files to kernel
+          cp /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
           
           # 3. Apply the main SUSFS patch
           patch -p1 < /tmp/custom_susfs.patch
