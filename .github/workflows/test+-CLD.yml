@@ -90,6 +90,33 @@ jobs:
           set -e
           patch -p1 -l < /tmp/custom_susfs.patch || true
 
+      - name: 🔧 Add Missing SUSFS Function Stubs
+        run: |
+          set -e
+          cat >> fs/susfs.c <<'EOF'
+
+          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+          #include <linux/mount.h>
+          #include "mount.h"
+          struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt) { return mnt; }
+          struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt) { return mnt; }
+          #endif
+          EOF
+
+          cat >> include/linux/susfs.h <<'EOF'
+
+          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+          struct vfsmount;
+          struct mount;
+          struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
+          struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
+          #endif
+          EOF
+
+          echo ">>> Stubs added:"
+          grep -n 'susfs_get_non_sus' fs/susfs.c | tail -3
+          
+
       - name: 🔨 Compile Kernel
         run: |
           set -e
@@ -114,15 +141,9 @@ jobs:
           CONFIG_HAVE_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
           CONFIG_THREAD_INFO_IN_TASK=y
-
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
-
-          # MOUNT DISABLED
           # CONFIG_KSU_SUSFS_SUS_MOUNT is not set
-          # CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT is not set
-          # CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT is not set
-
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
@@ -132,11 +153,12 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_UNICODE_FILTER=y
-
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=n
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=n
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           # CONFIG_DEBUG_INFO_BTF is not set
-          EOF
+          CFGEOF
 
           # Clean up any leading spaces created by YAML
           sed -i 's/^[ \t]*//' .config
