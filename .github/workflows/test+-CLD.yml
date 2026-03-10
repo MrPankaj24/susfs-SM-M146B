@@ -128,6 +128,7 @@ jobs:
           export DTC_FLAGS="-@"
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
+          export DEPMOD=depmod
           export LLVM=1
           export ARCH=arm64
           export TARGET_SOC=s5e8535
