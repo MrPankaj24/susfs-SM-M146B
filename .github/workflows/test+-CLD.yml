@@ -1,4 +1,4 @@
-name: 🏗️ Build Kernel (G ReSukiSU + Custom + SUSFS)
+name: 🏗️ Build Kernel (CLD ReSukiSU + Custom + SUSFS)
 
 on:
   workflow_dispatch:
@@ -49,17 +49,17 @@ jobs:
           mkdir -p toolchain/clang/host/linux-x86/clang-r450784d
           curl -L "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android13-release/clang-r450784d.tar.gz" -o /tmp/clang.tar.gz
           tar -xzf /tmp/clang.tar.gz -C toolchain/clang/host/linux-x86/clang-r450784d
-          rm /tmp/clang.tar.gz
+          rm -f /tmp/clang.tar.gz
 
       - name: ⬇️ Download Kernel Build Tools
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 -b main https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/build/kernel/build-tools
           mkdir -p toolchain/build/kernel/build-tools/path
-          ln -sf $(pwd)/toolchain/build/kernel/build-tools/linux-x86 toolchain/build/kernel/build-tools/path/linux-x86
-          ln -sf $(pwd)/toolchain/build/kernel/build-tools/sysroots/x86_64-unknown-linux-musl toolchain/build/kernel/build-tools/sysroot
+          ln -sf "$(pwd)/toolchain/build/kernel/build-tools/linux-x86" toolchain/build/kernel/build-tools/path/linux-x86
+          ln -sf "$(pwd)/toolchain/build/kernel/build-tools/sysroots/x86_64-unknown-linux-musl" toolchain/build/kernel/build-tools/sysroot
 
-      - name: ⬇️ Download Prebuilt Tools (for pahole)
+      - name: ⬇️ Download Prebuilt Tools
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
@@ -67,12 +67,14 @@ jobs:
       - name: 🥷 Clone SUSFS Repo
         run: |
           set -e
+          rm -rf /tmp/susfs4ksu
           git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
 
       - name: ⬇️ Download Custom SUSFS Patch & Fragment
         run: |
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
           curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
+          test -s /tmp/custom_susfs.patch
 
       - name: 🛡️ Inject ReSukiSU
         run: |
@@ -81,11 +83,19 @@ jobs:
       - name: 📁 Copy missing files from SUSFS
         run: |
           set -euo pipefail
+
           PATCH_FILE="/tmp/custom_susfs.patch"
-          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' | sed 's#^a/##; s#^b/##; s# b/##g' | tr ' ' '\n' | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
+
+          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
+            | sed 's#^a/##; s#^b/##; s# b/##g' \
+            | tr ' ' '\n' \
+            | sed '/^$/d' \
+            | sort -u > /tmp/patch_targets.txt || true
+
           while read -r f; do
             [ -z "$f" ] && continue
             candidate="/tmp/susfs4ksu/${f}"
+
             if [ ! -e "$f" ]; then
               if [ -e "$candidate" ]; then
                 mkdir -p "$(dirname "$f")"
@@ -96,83 +106,82 @@ jobs:
               fi
             fi
           done < /tmp/patch_targets.txt || true
+
           cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
           cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
       - name: 🥷 Apply SUSFS patch
         run: |
+          set -e
           patch -p1 -l < /tmp/custom_susfs.patch
+
+      - name: 🔧 Fix susfs.h includes
+        run: |
+          set -e
+          if [ -f include/linux/susfs.h ]; then
+            grep -q '<linux/cred.h>' include/linux/susfs.h || sed -i '1i\#include <linux/cred.h>' include/linux/susfs.h
+            grep -q '<linux/stat.h>' include/linux/susfs.h || sed -i '1i\#include <linux/stat.h>' include/linux/susfs.h
+          fi
 
       - name: 🥷 Inject pagemap.h SUSFS flags
         run: |
+          set -e
           echo ">>> Injecting SUSFS flags into pagemap.h..."
           if ! grep -q 'AS_FLAGS_OPEN_REDIRECT' include/linux/pagemap.h; then
-            sed -i '/AS_THP_SUPPORT = 6,/a\    AS_FLAGS_OPEN_REDIRECT    = 29,\n    AS_FLAGS_SUS_KSTAT        = 30,\n    AS_FLAGS_SUS_MAP          = 31,' include/linux/pagemap.h
+            sed -i '/AS_THP_SUPPORT = 6,/a\    AS_FLAGS_OPEN_REDIRECT = 29,\n    AS_FLAGS_SUS_KSTAT = 30,\n    AS_FLAGS_SUS_MAP = 31,' include/linux/pagemap.h
           fi
 
-      - name: 🔧 Add missing SUSFS function stubs
+      - name: 🔧 Add missing sync-susfs compatibility stubs
         run: |
           set -e
-          echo ">>> Adding missing SUSFS function stubs for sync-susfs compatibility..."
+
+          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
+            cat >> include/linux/susfs.h <<'EOF'
+            
+            #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+            struct vfsmount;
+            struct mount;
+            struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
+            struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
+            #endif
+            EOF
+          fi
 
           if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/susfs.c; then
-            cat >> fs/susfs.c << 'STUBEOF'
+            cat >> fs/susfs.c <<'EOF'
+            
+            #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+            #include <linux/mount.h>
+            #include "mount.h"
+            
+            struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt)
+            {
+              return mnt;
+            }
 
-/* Stubs for sync-susfs ReSukiSU compatibility */
-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-#include "mount.h"
+            struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt)
+            {
+              return mnt;
+            }
+            #endif
+            EOF
+            fi
 
-struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt)
-{
-    if (!mnt)
-        return mnt;
-    return mnt;
-}
-
-struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt)
-{
-    if (!mnt)
-        return mnt;
-    return mnt;
-}
-#endif /* CONFIG_KSU_SUSFS_SUS_MOUNT */
-STUBEOF
-            echo "  ✅ Added function stubs to fs/susfs.c"
-          else
-            echo "  Functions already exist in susfs.c"
-          fi
-
-          echo ">>> Adding declarations to susfs.h..."
-          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
-            cat >> include/linux/susfs.h << 'DECLEOF'
-
-/* sync-susfs compatibility declarations */
-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-struct vfsmount;
-struct mount;
-extern struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
-extern struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
-#endif
-DECLEOF
-            echo "  ✅ Added declarations to susfs.h"
-          fi
-
-          echo ">>> Verifying:"
-          grep -n 'susfs_get_non_sus' fs/susfs.c | head -5
-          grep -n 'susfs_get_non_sus' include/linux/susfs.h | head -5
+          grep -n 'susfs_get_non_sus' include/linux/susfs.h || true
+          grep -n 'susfs_get_non_sus' fs/susfs.c || true
 
       - name: 🔨 Compile Kernel
         run: |
           set -e
           set -o pipefail
 
-          # Prebuilt pahole MUST come first in PATH to fix BTF error
-          export PATH=$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/bin:$PATH
-          export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
-          export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
+          export PATH="$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/bin:$PATH"
+          export PATH="$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH"
+          export PATH="$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH"
 
           export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
           export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
+
           export DTC_FLAGS="-@"
           export PLATFORM_VERSION=15
           export ANDROID_MAJOR_VERSION=v
@@ -181,107 +190,122 @@ DECLEOF
           export ARCH=arm64
           export TARGET_SOC=s5e8535
 
-          echo ">>> Checking pahole version..."
-          which pahole
+          echo ">>> Tool versions"
+          which clang || true
+          clang --version | head -n 1 || true
+          which pahole || true
           pahole --version || true
 
           echo ">>> 1. Generating Base Config..."
           make s5e8535-m14xnsxx_defconfig
 
           echo ">>> 2. Injecting config..."
-          cat >> .config << 'CFGEOF'
-CONFIG_KSU=y
-CONFIG_KPROBES=y
-CONFIG_HAVE_KPROBES=y
-CONFIG_KPROBE_EVENTS=y
-CONFIG_THREAD_INFO_IN_TASK=y
-CONFIG_KSU_SUSFS=y
-CONFIG_KSU_SUSFS_SUS_PATH=y
-CONFIG_KSU_SUSFS_SUS_MOUNT=y
-CONFIG_KSU_SUSFS_SUS_KSTAT=y
-CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
-CONFIG_KSU_SUSFS_SUS_MAP=y
-CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-CONFIG_KSU_SUSFS_ENABLE_LOG=y
-CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-CONFIG_KSU_SUSFS_UNICODE_FILTER=y
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-CONFIG_TMPFS_XATTR=y
-CONFIG_TMPFS_POSIX_ACL=y
-CFGEOF
+          cat >> .config <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CONFIG_THREAD_INFO_IN_TASK=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_UNICODE_FILTER=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          # CONFIG_DEBUG_INFO_BTF is not set
+          EOF
+
+          if [ -s /tmp/defconfig.fragment ]; then
+            echo "" >> .config
+            cat /tmp/defconfig.fragment >> .config
+          fi
+
+          sed -i '/^CONFIG_DEBUG_INFO_BTF=/d' .config
+          echo '# CONFIG_DEBUG_INFO_BTF is not set' >> .config
 
           make olddefconfig
 
-          echo ">>> Config check:"
-          grep -E "CONFIG_KSU|CONFIG_DEBUG_INFO_BTF" .config | head -20
+          sed -i '/^CONFIG_DEBUG_INFO_BTF=/d' .config
+          echo '# CONFIG_DEBUG_INFO_BTF is not set' >> .config
+
+          echo ">>> Final config check"
+          grep -E 'CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_DEBUG_INFO_BTF' .config || true
 
           echo ">>> 3. Compiling..."
-          make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
+          make -j"$(nproc)" 2>&1 | tee /tmp/kernel_build.log
 
       - name: 📦 Package with AnyKernel3
         if: success()
         run: |
           set -e
+
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git /tmp/AnyKernel3
           rm -rf /tmp/AnyKernel3/.git /tmp/AnyKernel3/modules /tmp/AnyKernel3/patch
           rm -f /tmp/AnyKernel3/ramdisk/fstab.* 2>/dev/null || true
 
-          cat > /tmp/AnyKernel3/anykernel.sh << 'AKEOF'
-properties() { '
-kernel.string=ReSukiSU+SUSFS for SM-M146B
-do.devicecheck=1
-do.modules=0
-do.systemless=1
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=m14x
-device.name2=m14xns
-device.name3=SM-M146B
-device.name4=s5e8535
-supported.versions=13-15
-supported.patchlevels=
-'; }
+          cat > /tmp/AnyKernel3/anykernel.sh <<'EOF'
+          properties() { '
+          kernel.string=ReSukiSU+SUSFS for SM-M146B
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=m14x
+          device.name2=m14xns
+          device.name3=SM-M146B
+          device.name4=s5e8535
+          supported.versions=13-15
+          supported.patchlevels=
+          '; }
 
-block=/dev/block/by-name/boot;
-is_slot_device=0;
-ramdisk_compression=auto;
-patch_vbmeta_flag=auto;
+          block=/dev/block/by-name/boot;
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
 
-. tools/ak3-core.sh;
-dump_boot;
-write_boot;
-AKEOF
+          . tools/ak3-core.sh;
+          dump_boot;
+          write_boot;
+          EOF
 
           if [ -f arch/arm64/boot/Image ]; then
             cp arch/arm64/boot/Image /tmp/AnyKernel3/
-            echo ">>> Copied Image"
           else
-            echo "❌ No Image found!"
-            ls -la arch/arm64/boot/
+            echo "❌ arch/arm64/boot/Image not found"
+            ls -la arch/arm64/boot/ || true
             exit 1
           fi
 
           if [ -d arch/arm64/boot/dts/exynos ]; then
-            find arch/arm64/boot/dts/exynos -name "*.dtb" | while read dtb; do
+            find arch/arm64/boot/dts/exynos -name "*.dtb" | while read -r dtb; do
               cp "$dtb" /tmp/AnyKernel3/ 2>/dev/null || true
             done
           fi
 
           cd /tmp/AnyKernel3
           zip -r9 /tmp/ReSukiSU-SUSFS-M14x-kernel.zip * -x '*.git*'
-          mkdir -p ${GITHUB_WORKSPACE}/out
-          cp /tmp/ReSukiSU-SUSFS-M14x-kernel.zip ${GITHUB_WORKSPACE}/out/
-          ls -lh /tmp/ReSukiSU-SUSFS-M14x-kernel.zip
+
+          mkdir -p "${GITHUB_WORKSPACE}/out"
+          cp /tmp/ReSukiSU-SUSFS-M14x-kernel.zip "${GITHUB_WORKSPACE}/out/"
+          cp "${GITHUB_WORKSPACE}/arch/arm64/boot/Image" "${GITHUB_WORKSPACE}/out/" || true
 
       - name: ⬆️ Upload Flashable Kernel Zip
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: ReSukiSU-SUSFS-M14x-kernel
-          path: out/ReSukiSU-SUSFS-M14x-kernel.zip
+          path: out/
           retention-days: 30
 
       - name: ⬆️ Upload Build Log (On Failure)
