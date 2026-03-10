@@ -96,7 +96,13 @@ jobs:
           export PATH="$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/bin:$PATH"
           export PATH="$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH"
           export PATH="$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH"
+
+                    # ── Kernel build environment ──
+          export DTC_FLAGS="-@"
+          export PLATFORM_VERSION=15
+          export ANDROID_MAJOR_VERSION=v
           export LLVM=1
+          export DEPMOD=depmod
           export ARCH=arm64
           export TARGET_SOC=s5e8535
 
@@ -108,9 +114,15 @@ jobs:
           CONFIG_HAVE_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
           CONFIG_THREAD_INFO_IN_TASK=y
+
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+
+          # MOUNT DISABLED
+          # CONFIG_KSU_SUSFS_SUS_MOUNT is not set
+          # CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT is not set
+          # CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT is not set
+
           CONFIG_KSU_SUSFS_SUS_KSTAT=y
           CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
@@ -120,8 +132,7 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
           CONFIG_KSU_SUSFS_UNICODE_FILTER=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           # CONFIG_DEBUG_INFO_BTF is not set
