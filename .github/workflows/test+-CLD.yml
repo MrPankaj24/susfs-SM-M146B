@@ -157,7 +157,7 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           # CONFIG_DEBUG_INFO_BTF is not set
-          CFGEOF
+          EOF
 
           # Clean up any leading spaces created by YAML
           sed -i 's/^[ \t]*//' .config
