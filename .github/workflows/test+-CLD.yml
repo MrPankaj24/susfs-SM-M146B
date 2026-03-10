@@ -1,4 +1,4 @@
-name: 🏗️ Build Kernel (cld ReSukiSU + SUSFS)
+name: 🏗️ Build Kernel (G ReSukiSU + Custom + SUSFS)
 
 on:
   workflow_dispatch:
@@ -57,8 +57,9 @@ jobs:
           git clone --depth=1 -b main https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/build/kernel/build-tools
           mkdir -p toolchain/build/kernel/build-tools/path
           ln -sf $(pwd)/toolchain/build/kernel/build-tools/linux-x86 toolchain/build/kernel/build-tools/path/linux-x86
+          ln -sf $(pwd)/toolchain/build/kernel/build-tools/sysroots/x86_64-unknown-linux-musl toolchain/build/kernel/build-tools/sysroot
 
-      - name: ⬇️ Download Prebuilt Tools
+      - name: ⬇️ Download Prebuilt Tools (for pahole)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://android.googlesource.com/kernel/prebuilts/build-tools toolchain/prebuilts/kernel-build-tools
@@ -66,7 +67,6 @@ jobs:
       - name: 🥷 Clone SUSFS Repo
         run: |
           set -e
-          rm -rf /tmp/susfs4ksu
           git clone --depth=1 --single-branch --branch "${SUSFS_BRANCH}" "${SUSFS_URL}" /tmp/susfs4ksu
 
       - name: ⬇️ Download Custom SUSFS Patch & Fragment
@@ -76,82 +76,101 @@ jobs:
 
       - name: 🛡️ Inject ReSukiSU
         run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/sync-susfs/kernel/setup.sh" | bash
 
-      - name: 📁 Copy SUSFS source files
+      - name: 📁 Copy missing files from SUSFS
         run: |
           set -euo pipefail
-          echo ">>> Copying core SUSFS source files..."
-          cp -v /tmp/susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          cp -v /tmp/susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/ 2>/dev/null || true
-          echo ">>> SUSFS source files copied"
-          ls -la fs/susfs.c include/linux/susfs*.h
+          PATCH_FILE="/tmp/custom_susfs.patch"
+          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' | sed 's#^a/##; s#^b/##; s# b/##g' | tr ' ' '\n' | sed '/^$/d' | sort -u > /tmp/patch_targets.txt || true
+          while read -r f; do
+            [ -z "$f" ] && continue
+            candidate="/tmp/susfs4ksu/${f}"
+            if [ ! -e "$f" ]; then
+              if [ -e "$candidate" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "$candidate" . || cp "$candidate" "$f"
+              elif [ -e "/tmp/susfs4ksu/kernel_patches/$f" ]; then
+                mkdir -p "$(dirname "$f")"
+                cp --parents "/tmp/susfs4ksu/kernel_patches/$f" . || cp "/tmp/susfs4ksu/kernel_patches/$f" "$f"
+              fi
+            fi
+          done < /tmp/patch_targets.txt || true
+          cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
+          cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
       - name: 🥷 Apply SUSFS patch
         run: |
-          echo ">>> Applying SUSFS patch..."
-          patch -p1 --forward < /tmp/custom_susfs.patch || {
-            echo "⚠️ Some hunks failed, checking rejects..."
-            find . -name "*.rej" -exec echo "REJECT: {}" \; -exec cat {} \;
-            echo ">>> Continuing despite partial failures..."
-          }
+          patch -p1 -l < /tmp/custom_susfs.patch
 
-      - name: 🛠️ Fix SUSFS Integration
+      - name: 🥷 Inject pagemap.h SUSFS flags
+        run: |
+          echo ">>> Injecting SUSFS flags into pagemap.h..."
+          if ! grep -q 'AS_FLAGS_OPEN_REDIRECT' include/linux/pagemap.h; then
+            sed -i '/AS_THP_SUPPORT = 6,/a\    AS_FLAGS_OPEN_REDIRECT    = 29,\n    AS_FLAGS_SUS_KSTAT        = 30,\n    AS_FLAGS_SUS_MAP          = 31,' include/linux/pagemap.h
+          fi
+
+      - name: 🔧 Add missing SUSFS function stubs
         run: |
           set -e
+          echo ">>> Adding missing SUSFS function stubs for sync-susfs compatibility..."
 
-          echo ">>> Step 1: Fix susfs.h dependencies..."
-          if [ -f include/linux/susfs.h ]; then
-            grep -q '<linux/cred.h>' include/linux/susfs.h || \
-              sed -i '1i\#include <linux/cred.h>' include/linux/susfs.h
-            grep -q '<linux/stat.h>' include/linux/susfs.h || \
-              sed -i '1i\#include <linux/stat.h>' include/linux/susfs.h
+          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/susfs.c; then
+            cat >> fs/susfs.c << 'STUBEOF'
+
+/* Stubs for sync-susfs ReSukiSU compatibility */
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+#include "mount.h"
+
+struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt)
+{
+    if (!mnt)
+        return mnt;
+    return mnt;
+}
+
+struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt)
+{
+    if (!mnt)
+        return mnt;
+    return mnt;
+}
+#endif /* CONFIG_KSU_SUSFS_SUS_MOUNT */
+STUBEOF
+            echo "  ✅ Added function stubs to fs/susfs.c"
+          else
+            echo "  Functions already exist in susfs.c"
           fi
 
-          echo ">>> Step 2: Inject susfs.h ONLY into patch-modified .c files..."
-          PATCH_FILE="/tmp/custom_susfs.patch"
-          grep '^diff --git' "$PATCH_FILE" | sed 's|.*b/||' | sort -u | while read -r file; do
-            [ -f "$file" ] || continue
-            echo "$file" | grep -q '\.c$' || continue
-            if grep -q 'susfs_' "$file" && ! grep -q '<linux/susfs.h>' "$file"; then
-              echo "  Injecting susfs.h into: $file"
-              sed -i '0,/^#include/{/^#include/a\#include <linux/susfs.h>
-              }' "$file"
-            fi
-          done || true
+          echo ">>> Adding declarations to susfs.h..."
+          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
+            cat >> include/linux/susfs.h << 'DECLEOF'
 
-          echo ">>> Step 3: Inject SUSFS declarations into fs/namespace.c..."
-          if ! grep -q 'DEFINE_IDA(susfs_mnt_id_ida)' fs/namespace.c; then
-            printf '%s\n' \
-              '' \
-              '/* SUSFS namespace declarations */' \
-              'DEFINE_IDA(susfs_mnt_id_ida);' \
-              'DEFINE_IDA(susfs_mnt_group_ida);' \
-              'extern bool susfs_is_sdcard_android_data_decrypted;' \
-              'extern bool susfs_is_current_ksu_domain(void);' \
-              '#ifndef CL_COPY_MNT_NS' \
-              '#define CL_COPY_MNT_NS (1 << 25)' \
-              '#endif' \
-              > /tmp/susfs_ns_decl.c
-
-            if grep -q 'static DEFINE_IDA(mnt_group_ida)' fs/namespace.c; then
-              sed -i '/static DEFINE_IDA(mnt_group_ida)/r /tmp/susfs_ns_decl.c' fs/namespace.c
-            else
-              LAST_INC=$(grep -n '^#include' fs/namespace.c | tail -1 | cut -d: -f1)
-              sed -i "${LAST_INC}r /tmp/susfs_ns_decl.c" fs/namespace.c
-            fi
+/* sync-susfs compatibility declarations */
+#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+struct vfsmount;
+struct mount;
+extern struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
+extern struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
+#endif
+DECLEOF
+            echo "  ✅ Added declarations to susfs.h"
           fi
 
-          echo ">>> Verification:"
-          grep -n 'DEFINE_IDA(susfs_\|extern bool susfs_\|CL_COPY_MNT_NS' fs/namespace.c
+          echo ">>> Verifying:"
+          grep -n 'susfs_get_non_sus' fs/susfs.c | head -5
+          grep -n 'susfs_get_non_sus' include/linux/susfs.h | head -5
 
       - name: 🔨 Compile Kernel
         run: |
           set -e
           set -o pipefail
+
+          # Prebuilt pahole MUST come first in PATH to fix BTF error
+          export PATH=$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/bin:$PATH
           export PATH=$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH
           export PATH=$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH
+
           export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
           export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
           export DTC_FLAGS="-@"
@@ -162,56 +181,44 @@ jobs:
           export ARCH=arm64
           export TARGET_SOC=s5e8535
 
-          echo ">>> Generating Base Config..."
+          echo ">>> Checking pahole version..."
+          which pahole
+          pahole --version || true
+
+          echo ">>> 1. Generating Base Config..."
           make s5e8535-m14xnsxx_defconfig
 
-          echo ">>> Injecting kernel config..."
-          cat >> .config << 'EOF'
-          CONFIG_KSU=y
-          CONFIG_KPROBES=y
-          CONFIG_HAVE_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
-          CONFIG_THREAD_INFO_IN_TASK=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_UNICODE_FILTER=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          # Samsung security - disable all
-          # CONFIG_DEFEX is not set
-          # CONFIG_DEFEX_KERNEL_ONLY is not set
-          # CONFIG_SECURITY_DEFEX is not set
-          # CONFIG_FIVE is not set
-          # CONFIG_FIVE_GKI is not set
-          # CONFIG_PROCA is not set
-          # CONFIG_GAF is not set
-          CONFIG_KDP_CRED=n
-          CONFIG_KDP_NS=n
-          CONFIG_KDP_TEST=n
-          CONFIG_RKP=n
-          CONFIG_UH=n
-          CONFIG_UH_RKP=n
-          EOF
-
-          sed -i 's/^[[:space:]]*//' .config
+          echo ">>> 2. Injecting config..."
+          cat >> .config << 'CFGEOF'
+CONFIG_KSU=y
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+CONFIG_THREAD_INFO_IN_TASK=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_UNICODE_FILTER=y
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+CONFIG_TMPFS_XATTR=y
+CONFIG_TMPFS_POSIX_ACL=y
+CFGEOF
 
           make olddefconfig
 
-          echo ">>> Config verification:"
-          grep -E "CONFIG_KSU|CONFIG_DEFEX|CONFIG_KDP|CONFIG_RKP|CONFIG_UH|CONFIG_PROCA|CONFIG_FIVE" .config || true
+          echo ">>> Config check:"
+          grep -E "CONFIG_KSU|CONFIG_DEBUG_INFO_BTF" .config | head -20
 
-          echo ">>> Compiling ($(nproc) threads)..."
+          echo ">>> 3. Compiling..."
           make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
       - name: 📦 Package with AnyKernel3
@@ -223,59 +230,50 @@ jobs:
           rm -f /tmp/AnyKernel3/ramdisk/fstab.* 2>/dev/null || true
 
           cat > /tmp/AnyKernel3/anykernel.sh << 'AKEOF'
-          # AnyKernel3 Ramdisk Mod Script
-          properties() { '
-          kernel.string=ReSukiSU+SUSFS for SM-M146B
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=m14x
-          device.name2=m14xns
-          device.name3=SM-M146B
-          device.name4=s5e8535
-          supported.versions=13-15
-          supported.patchlevels=
-          '; }
+properties() { '
+kernel.string=ReSukiSU+SUSFS for SM-M146B
+do.devicecheck=1
+do.modules=0
+do.systemless=1
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=m14x
+device.name2=m14xns
+device.name3=SM-M146B
+device.name4=s5e8535
+supported.versions=13-15
+supported.patchlevels=
+'; }
 
-          block=/dev/block/by-name/boot;
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
+block=/dev/block/by-name/boot;
+is_slot_device=0;
+ramdisk_compression=auto;
+patch_vbmeta_flag=auto;
 
-          . tools/ak3-core.sh;
-          dump_boot;
-          write_boot;
-          AKEOF
-
-          # Remove leading spaces from anykernel.sh
-          sed -i 's/^[[:space:]]*//' /tmp/AnyKernel3/anykernel.sh
+. tools/ak3-core.sh;
+dump_boot;
+write_boot;
+AKEOF
 
           if [ -f arch/arm64/boot/Image ]; then
             cp arch/arm64/boot/Image /tmp/AnyKernel3/
             echo ">>> Copied Image"
-          elif [ -f arch/arm64/boot/Image.gz ]; then
-            cp arch/arm64/boot/Image.gz /tmp/AnyKernel3/
-            echo ">>> Copied Image.gz"
           else
-            echo "❌ No kernel image found!"
+            echo "❌ No Image found!"
+            ls -la arch/arm64/boot/
             exit 1
           fi
 
-          # Copy DTBs if present
           if [ -d arch/arm64/boot/dts/exynos ]; then
-            find arch/arm64/boot/dts/exynos -name "*.dtb" | head -20 | while read dtb; do
+            find arch/arm64/boot/dts/exynos -name "*.dtb" | while read dtb; do
               cp "$dtb" /tmp/AnyKernel3/ 2>/dev/null || true
             done
           fi
 
           cd /tmp/AnyKernel3
           zip -r9 /tmp/ReSukiSU-SUSFS-M14x-kernel.zip * -x '*.git*'
-
           mkdir -p ${GITHUB_WORKSPACE}/out
           cp /tmp/ReSukiSU-SUSFS-M14x-kernel.zip ${GITHUB_WORKSPACE}/out/
-          echo ">>> Flashable zip created!"
           ls -lh /tmp/ReSukiSU-SUSFS-M14x-kernel.zip
 
       - name: ⬆️ Upload Flashable Kernel Zip
@@ -284,16 +282,6 @@ jobs:
         with:
           name: ReSukiSU-SUSFS-M14x-kernel
           path: out/ReSukiSU-SUSFS-M14x-kernel.zip
-          retention-days: 30
-
-      - name: ⬆️ Upload Raw Kernel Image
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-image-raw
-          path: |
-            arch/arm64/boot/Image
-            arch/arm64/boot/Image.gz
           retention-days: 30
 
       - name: ⬆️ Upload Build Log (On Failure)
