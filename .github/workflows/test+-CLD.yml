@@ -157,6 +157,15 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
           # CONFIG_DEBUG_INFO_BTF is not set
+
+          # Essential Samsung/Exynos options (DO NOT DISABLE)
+          CONFIG_EXYNOS_CHIPID=y
+          CONFIG_EXYNOS_PM=y
+          CONFIG_EXYNOS_REGULATOR_COUPLER=y
+          CONFIG_SAMSUNG_PM_CHECK=y
+          CONFIG_S5P_DEV_UART=y
+          CONFIG_SERIAL_SAMSUNG=y
+          CONFIG_SERIAL_SAMSUNG_CONSOLE=y
           EOF
 
           # Clean up any leading spaces created by YAML
