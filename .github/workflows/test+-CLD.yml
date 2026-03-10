@@ -90,51 +90,6 @@ jobs:
           set -e
           patch -p1 -l < /tmp/custom_susfs.patch || true
 
-      - name: 🔧 Fix Header Conflict & Symbols
-        run: |
-          set -e
-
-          # 1. Remove AS_FLAGS from susfs_def.h to avoid conflict with pagemap.h
-          sed -i '/AS_FLAGS_OPEN_REDIRECT/d' include/linux/susfs_def.h
-          sed -i '/AS_FLAGS_SUS_KSTAT/d' include/linux/susfs_def.h
-          sed -i '/AS_FLAGS_SUS_MAP/d' include/linux/susfs_def.h
-
-          # 2. Inject flags into pagemap.h
-          if ! grep -q 'AS_FLAGS_OPEN_REDIRECT' include/linux/pagemap.h; then
-            sed -i '/AS_THP_SUPPORT = 6,/a\    AS_FLAGS_OPEN_REDIRECT = 29,\n    AS_FLAGS_SUS_KSTAT = 30,\n    AS_FLAGS_SUS_MAP = 31,' include/linux/pagemap.h
-          fi
-
-          # 3. Add missing sync-susfs stubs to fs/susfs.c (NO extra #include)
-          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/susfs.c; then
-            cat >> fs/susfs.c <<'EOF'
-
-          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-          struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt)
-          {
-              return mnt;
-          }
-
-          struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt)
-          {
-              return mnt;
-          }
-          #endif
-          EOF
-          fi
-
-          # 4. Add declarations to susfs.h
-          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
-            cat >> include/linux/susfs.h <<'EOF'
-
-          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-          struct vfsmount;
-          struct mount;
-          struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
-          struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
-          #endif
-          EOF
-          fi
-
       - name: 🔨 Compile Kernel
         run: |
           set -e
