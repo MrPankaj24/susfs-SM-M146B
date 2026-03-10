@@ -78,7 +78,7 @@ jobs:
 
       - name: 🛡️ Inject ReSukiSU
         run: |
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/sync-susfs/kernel/setup.sh" | bash
 
       - name: 📁 Copy missing files from SUSFS
         run: |
@@ -137,6 +137,7 @@ jobs:
 
           if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
             cat >> include/linux/susfs.h <<'EOF'
+
           #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
           struct vfsmount;
           struct mount;
@@ -148,18 +149,16 @@ jobs:
 
           if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/susfs.c; then
             cat >> fs/susfs.c <<'EOF'
-          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-          #include <linux/mount.h>
-          #include "mount.h"
 
+          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
           struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt)
           {
-            return mnt;
+              return mnt;
           }
 
           struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt)
           {
-            return mnt;
+              return mnt;
           }
           #endif
           EOF
@@ -167,6 +166,15 @@ jobs:
 
           grep -n 'susfs_get_non_sus' include/linux/susfs.h || true
           grep -n 'susfs_get_non_sus' fs/susfs.c || true
+
+      - name: 🥷 Force Compile SUSFS
+        run: |
+          set -e
+          echo ">>> Forcing Kbuild to compile susfs.c..."
+          if ! grep -q 'susfs.o' fs/Makefile; then
+            echo "obj-y += susfs.o" >> fs/Makefile
+            echo "CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MOUNT=1" >> fs/Makefile
+          fi
 
       - name: 🔨 Compile Kernel
         run: |
