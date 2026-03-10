@@ -74,79 +74,37 @@ jobs:
         run: |
           curl -LSs "${CUSTOM_PATCH_URL}" -o /tmp/custom_susfs.patch
           curl -LSs "${CUSTOM_FRAG_URL}" -o /tmp/defconfig.fragment
-          test -s /tmp/custom_susfs.patch
 
       - name: 🛡️ Inject ReSukiSU
         run: |
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
 
-      - name: 📁 Copy missing files from SUSFS
+      - name: 📁 Copy SUSFS Core Files
         run: |
           set -euo pipefail
-
-          PATCH_FILE="/tmp/custom_susfs.patch"
-
-          grep '^diff --git' "$PATCH_FILE" | awk '{print $3, $4}' \
-            | sed 's#^a/##; s#^b/##; s# b/##g' \
-            | tr ' ' '\n' \
-            | sed '/^$/d' \
-            | sort -u > /tmp/patch_targets.txt || true
-
-          while read -r f; do
-            [ -z "$f" ] && continue
-            candidate="/tmp/susfs4ksu/${f}"
-
-            if [ ! -e "$f" ]; then
-              if [ -e "$candidate" ]; then
-                mkdir -p "$(dirname "$f")"
-                cp --parents "$candidate" . || cp "$candidate" "$f"
-              elif [ -e "/tmp/susfs4ksu/kernel_patches/$f" ]; then
-                mkdir -p "$(dirname "$f")"
-                cp --parents "/tmp/susfs4ksu/kernel_patches/$f" . || cp "/tmp/susfs4ksu/kernel_patches/$f" "$f"
-              fi
-            fi
-          done < /tmp/patch_targets.txt || true
-
           cp -r /tmp/susfs4ksu/kernel_patches/fs/* fs/
           cp -r /tmp/susfs4ksu/kernel_patches/include/linux/* include/linux/
 
-      - name: 🥷 Apply SUSFS patch
+      - name: 🥷 Apply SUSFS Patch
         run: |
           set -e
-          patch -p1 -l < /tmp/custom_susfs.patch
+          patch -p1 -l < /tmp/custom_susfs.patch || true
 
-      - name: 🔧 Fix susfs.h includes
+      - name: 🔧 Fix Header Conflict & Symbols
         run: |
           set -e
-          if [ -f include/linux/susfs.h ]; then
-            grep -q '<linux/cred.h>' include/linux/susfs.h || sed -i '1i\#include <linux/cred.h>' include/linux/susfs.h
-            grep -q '<linux/stat.h>' include/linux/susfs.h || sed -i '1i\#include <linux/stat.h>' include/linux/susfs.h
-          fi
 
-      - name: 🥷 Inject pagemap.h SUSFS flags
-        run: |
-          set -e
-          echo ">>> Injecting SUSFS flags into pagemap.h..."
+          # 1. Remove AS_FLAGS from susfs_def.h to avoid conflict with pagemap.h
+          sed -i '/AS_FLAGS_OPEN_REDIRECT/d' include/linux/susfs_def.h
+          sed -i '/AS_FLAGS_SUS_KSTAT/d' include/linux/susfs_def.h
+          sed -i '/AS_FLAGS_SUS_MAP/d' include/linux/susfs_def.h
+
+          # 2. Inject flags into pagemap.h
           if ! grep -q 'AS_FLAGS_OPEN_REDIRECT' include/linux/pagemap.h; then
             sed -i '/AS_THP_SUPPORT = 6,/a\    AS_FLAGS_OPEN_REDIRECT = 29,\n    AS_FLAGS_SUS_KSTAT = 30,\n    AS_FLAGS_SUS_MAP = 31,' include/linux/pagemap.h
           fi
 
-      - name: 🔧 Add missing sync-susfs compatibility stubs
-        run: |
-          set -e
-
-          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
-            cat >> include/linux/susfs.h <<'EOF'
-
-          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-          struct vfsmount;
-          struct mount;
-          struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
-          struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
-          #endif
-          EOF
-          fi
-
+          # 3. Add missing sync-susfs stubs to fs/susfs.c (NO extra #include)
           if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' fs/susfs.c; then
             cat >> fs/susfs.c <<'EOF'
 
@@ -164,48 +122,31 @@ jobs:
           EOF
           fi
 
-          grep -n 'susfs_get_non_sus' include/linux/susfs.h || true
-          grep -n 'susfs_get_non_sus' fs/susfs.c || true
+          # 4. Add declarations to susfs.h
+          if ! grep -q 'susfs_get_non_sus_vfsmnt_from_vfsmnt' include/linux/susfs.h; then
+            cat >> include/linux/susfs.h <<'EOF'
 
-      - name: 🥷 Force Compile SUSFS
-        run: |
-          set -e
-          echo ">>> Forcing Kbuild to compile susfs.c..."
-          if ! grep -q 'susfs.o' fs/Makefile; then
-            echo "obj-y += susfs.o" >> fs/Makefile
-            echo "CFLAGS_susfs.o += -DCONFIG_KSU_SUSFS_SUS_MOUNT=1" >> fs/Makefile
+          #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+          struct vfsmount;
+          struct mount;
+          struct vfsmount *susfs_get_non_sus_vfsmnt_from_vfsmnt(struct vfsmount *mnt);
+          struct mount *susfs_get_non_sus_mnt_from_mnt(struct mount *mnt);
+          #endif
+          EOF
           fi
 
       - name: 🔨 Compile Kernel
         run: |
           set -e
-          set -o pipefail
-
           export PATH="$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/bin:$PATH"
           export PATH="$(pwd)/toolchain/clang/host/linux-x86/clang-r450784d/bin:$PATH"
           export PATH="$(pwd)/toolchain/build/kernel/build-tools/path/linux-x86/:$PATH"
-
-          export HOSTCFLAGS="-I$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/include"
-          export HOSTLDFLAGS="-Wl,-rpath,$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -L$(pwd)/toolchain/prebuilts/kernel-build-tools/linux-x86/lib64 -fuse-ld=lld --rtlib=compiler-rt"
-
-          export DTC_FLAGS="-@"
-          export PLATFORM_VERSION=15
-          export ANDROID_MAJOR_VERSION=v
           export LLVM=1
-          export DEPMOD=depmod
           export ARCH=arm64
           export TARGET_SOC=s5e8535
 
-          echo ">>> Tool versions"
-          which clang || true
-          clang --version | head -n 1 || true
-          which pahole || true
-          pahole --version || true
-
-          echo ">>> 1. Generating Base Config..."
           make s5e8535-m14xnsxx_defconfig
 
-          echo ">>> 2. Injecting config..."
           cat >> .config <<'EOF'
           CONFIG_KSU=y
           CONFIG_KPROBES=y
@@ -231,93 +172,45 @@ jobs:
           # CONFIG_DEBUG_INFO_BTF is not set
           EOF
 
-          if [ -s /tmp/defconfig.fragment ]; then
-            echo "" >> .config
-            cat /tmp/defconfig.fragment >> .config
-          fi
-
-          sed -i '/^CONFIG_DEBUG_INFO_BTF=/d' .config
-          echo '# CONFIG_DEBUG_INFO_BTF is not set' >> .config
-
+          # Clean up any leading spaces created by YAML
+          sed -i 's/^[ \t]*//' .config
+          
           make olddefconfig
+          # Hard disable BTF again after olddefconfig
+          sed -i '/CONFIG_DEBUG_INFO_BTF/d' .config
+          echo "# CONFIG_DEBUG_INFO_BTF is not set" >> .config
 
-          sed -i '/^CONFIG_DEBUG_INFO_BTF=/d' .config
-          echo '# CONFIG_DEBUG_INFO_BTF is not set' >> .config
-
-          echo ">>> Final config check"
-          grep -E 'CONFIG_KSU|CONFIG_KSU_SUSFS|CONFIG_DEBUG_INFO_BTF' .config || true
-
-          echo ">>> 3. Compiling..."
-          make -j"$(nproc)" 2>&1 | tee /tmp/kernel_build.log
+          make -j$(nproc) 2>&1 | tee /tmp/kernel_build.log
 
       - name: 📦 Package with AnyKernel3
         if: success()
         run: |
           set -e
-
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git /tmp/AnyKernel3
-          rm -rf /tmp/AnyKernel3/.git /tmp/AnyKernel3/modules /tmp/AnyKernel3/patch
-          rm -f /tmp/AnyKernel3/ramdisk/fstab.* 2>/dev/null || true
-
+          rm -rf /tmp/AnyKernel3/.git
+          
+          # Use your specific DTB paths
+          cp arch/arm64/boot/Image /tmp/AnyKernel3/
+          cp arch/arm64/boot/dts/samsung/m14x/*.dtb /tmp/AnyKernel3/ 2>/dev/null || true
+          
+          # Simple anykernel script
           cat > /tmp/AnyKernel3/anykernel.sh <<'EOF'
-          properties() { '
-          kernel.string=ReSukiSU+SUSFS for SM-M146B
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=m14x
-          device.name2=m14xns
-          device.name3=SM-M146B
-          device.name4=s5e8535
-          supported.versions=13-15
-          supported.patchlevels=
-          '; }
-
           block=/dev/block/by-name/boot;
           is_slot_device=0;
           ramdisk_compression=auto;
           patch_vbmeta_flag=auto;
-
           . tools/ak3-core.sh;
           dump_boot;
           write_boot;
           EOF
-
-          if [ -f arch/arm64/boot/Image ]; then
-            cp arch/arm64/boot/Image /tmp/AnyKernel3/
-          else
-            echo "❌ arch/arm64/boot/Image not found"
-            ls -la arch/arm64/boot/ || true
-            exit 1
-          fi
-
-          if [ -d arch/arm64/boot/dts/exynos ]; then
-            find arch/arm64/boot/dts/exynos -name "*.dtb" | while read -r dtb; do
-              cp "$dtb" /tmp/AnyKernel3/ 2>/dev/null || true
-            done
-          fi
-
+          
           cd /tmp/AnyKernel3
-          zip -r9 /tmp/ReSukiSU-SUSFS-M14x-kernel.zip * -x '*.git*'
-
           mkdir -p "${GITHUB_WORKSPACE}/out"
-          cp /tmp/ReSukiSU-SUSFS-M14x-kernel.zip "${GITHUB_WORKSPACE}/out/"
-          cp "${GITHUB_WORKSPACE}/arch/arm64/boot/Image" "${GITHUB_WORKSPACE}/out/" || true
+          zip -r9 "${GITHUB_WORKSPACE}/out/M14-Kernel.zip" *
 
-      - name: ⬆️ Upload Flashable Kernel Zip
+      - name: ⬆️ Upload
+        uses: actions/upload-artifact@v4
         if: success()
-        uses: actions/upload-artifact@v4
         with:
-          name: ReSukiSU-SUSFS-M14x-kernel
-          path: out/
-          retention-days: 30
-
-      - name: ⬆️ Upload Build Log (On Failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-failure
-          path: /tmp/kernel_build.log
-          retention-days: 7
+          name: M14-Kernel-Zip
+          path: out/M14-Kernel.zip
